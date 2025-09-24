@@ -100,7 +100,7 @@ Run the service directly for testing:
 ./target/release/wdns-service --config custom-config.json
 ```
 
-The service will start on `http://127.0.0.1:9700` by default.
+The service will start on `http://0.0.0.0:9700` by default (listening on all interfaces).
 
 ### Windows Service Mode
 
@@ -153,28 +153,80 @@ The service creates a `config.json` file on first run:
 ### Using PowerShell
 
 ```powershell
-# Health check
+# Health check (from local machine)
 Invoke-RestMethod -Uri "http://127.0.0.1:9700/health"
 
-# DNS resolution
+# Health check (from remote machine)
+Invoke-RestMethod -Uri "http://192.168.0.115:9700/health"
+
+# DNS resolution (from local machine)
 $body = @{
     hosts = @("google.com", "github.com", "stackoverflow.com")
 } | ConvertTo-Json
 
 Invoke-RestMethod -Uri "http://127.0.0.1:9700/api/dns/resolve" -Method POST -Body $body -ContentType "application/json"
+
+# DNS resolution (from remote machine)
+Invoke-RestMethod -Uri "http://192.168.0.115:9700/api/dns/resolve" -Method POST -Body $body -ContentType "application/json"
 ```
 
 ### Using curl
 
 ```bash
-# Health check
+# Health check (from local machine)
 curl http://127.0.0.1:9700/health
+
+# Health check (from remote machine)
+curl http://192.168.0.115:9700/health
+
+# DNS resolution (from local machine)
+curl -X POST http://127.0.0.1:9700/api/dns/resolve \
+  -H "Content-Type: application/json" \
+  -d '{"hosts": ["google.com", "github.com"]}'
+
+# DNS resolution (from remote machine)
+curl -X POST http://192.168.0.115:9700/api/dns/resolve \
+  -H "Content-Type: application/json" \
+  -d '{"hosts": ["google.com", "github.com"]}'
+```
+
+## Network Access
+
+### Remote Access Configuration
+
+The service is configured to listen on all interfaces (`0.0.0.0:9700`) by default, allowing remote access from other machines on your network.
+
+#### Windows Firewall Configuration
+
+```powershell
+# Allow inbound connections on port 9700
+New-NetFirewallRule -DisplayName "WDNS Service" -Direction Inbound -Protocol TCP -LocalPort 9700 -Action Allow
+
+# Or using netsh (run as Administrator)
+netsh advfirewall firewall add rule name="WDNS Service" dir=in action=allow protocol=TCP localport=9700
+```
+
+#### Testing Remote Access
+
+```powershell
+# From another machine on the network
+# Replace 192.168.0.115 with your server's IP address
+
+# Health check
+curl http://192.168.0.115:9700/health
 
 # DNS resolution
 curl -X POST http://192.168.0.115:9700/api/dns/resolve \
   -H "Content-Type: application/json" \
   -d '{"hosts": ["google.com", "github.com"]}'
 ```
+
+#### Security Considerations
+
+- **Firewall**: Only open port 9700 if you need remote access
+- **Network Security**: Consider using VPN or private networks
+- **Authentication**: The current implementation has no authentication
+- **HTTPS**: Consider adding TLS encryption for production use
 
 ## Logging
 
