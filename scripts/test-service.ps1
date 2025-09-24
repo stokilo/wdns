@@ -1,10 +1,15 @@
 # WDNS Service Test Script
 
 param(
-    [string]$ServiceUrl = "http://127.0.0.1:9700"
+    [string]$ServiceUrl = "http://127.0.0.1:9700",
+    [string]$ProxyUrl = "http://127.0.0.1:9701",
+    [switch]$TestProxy
 )
 
 Write-Host "Testing WDNS Service at $ServiceUrl" -ForegroundColor Green
+if ($TestProxy) {
+    Write-Host "Testing Proxy Server at $ProxyUrl" -ForegroundColor Green
+}
 
 # Test health endpoint
 Write-Host "`n1. Testing health endpoint..." -ForegroundColor Cyan
@@ -91,5 +96,46 @@ Write-Host "  Duration: $([math]::Round($duration, 2))ms" -ForegroundColor Cyan
 Write-Host "  Successful requests: $successful/$($requests.Count)" -ForegroundColor Cyan
 Write-Host "  Total resolved: $totalResolved" -ForegroundColor Cyan
 Write-Host "  Total errors: $totalErrors" -ForegroundColor Cyan
+
+# Test proxy server if requested
+if ($TestProxy) {
+    Write-Host "`n5. Testing proxy server..." -ForegroundColor Cyan
+    
+    # Test proxy with HTTP
+    Write-Host "Testing HTTP proxy..." -ForegroundColor Yellow
+    try {
+        $proxyResponse = Invoke-WebRequest -Uri "http://httpbin.org/ip" -Proxy $ProxyUrl -TimeoutSec 10 -UseBasicParsing
+        Write-Host "✓ HTTP proxy is working" -ForegroundColor Green
+        Write-Host "Response: $($proxyResponse.Content)" -ForegroundColor Gray
+    } catch {
+        Write-Host "✗ HTTP proxy test failed: $($_.Exception.Message)" -ForegroundColor Red
+    }
+    
+    # Test proxy with HTTPS
+    Write-Host "Testing HTTPS proxy..." -ForegroundColor Yellow
+    try {
+        $proxyResponse = Invoke-WebRequest -Uri "https://httpbin.org/ip" -Proxy $ProxyUrl -TimeoutSec 10 -UseBasicParsing
+        Write-Host "✓ HTTPS proxy is working" -ForegroundColor Green
+        Write-Host "Response: $($proxyResponse.Content)" -ForegroundColor Gray
+    } catch {
+        Write-Host "✗ HTTPS proxy test failed: $($_.Exception.Message)" -ForegroundColor Red
+    }
+    
+    # Test proxy with environment variables
+    Write-Host "Testing proxy with environment variables..." -ForegroundColor Yellow
+    $env:HTTP_PROXY = $ProxyUrl
+    $env:HTTPS_PROXY = $ProxyUrl
+    
+    try {
+        $envResponse = Invoke-WebRequest -Uri "http://httpbin.org/ip" -TimeoutSec 10 -UseBasicParsing
+        Write-Host "✓ Proxy with environment variables is working" -ForegroundColor Green
+        Write-Host "Response: $($envResponse.Content)" -ForegroundColor Gray
+    } catch {
+        Write-Host "✗ Proxy with environment variables test failed: $($_.Exception.Message)" -ForegroundColor Red
+    } finally {
+        Remove-Item Env:HTTP_PROXY -ErrorAction SilentlyContinue
+        Remove-Item Env:HTTPS_PROXY -ErrorAction SilentlyContinue
+    }
+}
 
 Write-Host "`n🎉 All tests passed! WDNS Service is working correctly." -ForegroundColor Green

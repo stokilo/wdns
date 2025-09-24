@@ -6,7 +6,7 @@
 sudo sh scripts/update-hosts.sh
 ```
 
-A high-performance Windows DNS resolution service built with Rust and Tokio. Provides HTTP API for concurrent DNS resolution with Windows service support.
+A high-performance Windows DNS resolution service built with Rust and Tokio. Provides HTTP API for concurrent DNS resolution and HTTP proxy server with Windows service support.
 
 ## Features
 
@@ -14,6 +14,7 @@ A high-performance Windows DNS resolution service built with Rust and Tokio. Pro
 - 🔄 **Concurrent Resolution**: Resolves multiple hosts in parallel
 - 🪟 **Windows Service**: Runs as a native Windows service
 - 🌐 **HTTP API**: RESTful API for DNS resolution
+- 🔗 **HTTP Proxy**: Built-in HTTP proxy server for traffic tunneling
 - ⚡ **Async**: Non-blocking I/O with Tokio
 - 📊 **Health Checks**: Built-in health monitoring endpoints
 
@@ -106,7 +107,11 @@ Run the service directly for testing:
 ./target/release/wdns-service --config custom-config.json
 ```
 
-The service will start on `http://0.0.0.0:9700` by default (listening on all interfaces).
+The service will start on:
+- **DNS Service**: `http://0.0.0.0:9700` (HTTP API)
+- **Proxy Server**: `http://0.0.0.0:9701` (HTTP Proxy)
+
+Both services listen on all interfaces by default.
 
 ### Windows Service Mode
 
@@ -142,17 +147,94 @@ The service creates a `config.json` file on first run:
 
 ```json
 {
-  "bind_address": "127.0.0.1:9700",
+  "bind_address": "0.0.0.0:9700",
   "dns_timeout_seconds": 10,
-  "max_concurrent_resolutions": 100
+  "max_concurrent_resolutions": 100,
+  "proxy_enabled": true,
+  "proxy_bind_address": "0.0.0.0:9701"
 }
 ```
 
 ### Configuration Options
 
-- `bind_address`: IP address and port to bind the HTTP server
+- `bind_address`: IP address and port to bind the DNS HTTP server
 - `dns_timeout_seconds`: Timeout for DNS resolution in seconds
 - `max_concurrent_resolutions`: Maximum number of concurrent DNS resolutions
+- `proxy_enabled`: Enable/disable the HTTP proxy server
+- `proxy_bind_address`: IP address and port to bind the proxy server
+
+## HTTP Proxy Server
+
+The service includes a built-in HTTP proxy server that can tunnel traffic through port 9701.
+
+### Proxy Features
+
+- **HTTP Proxy**: Standard HTTP proxy functionality
+- **HTTPS Tunneling**: CONNECT method support for HTTPS traffic
+- **Traffic Forwarding**: Transparent forwarding of HTTP requests
+- **Concurrent Handling**: Multiple simultaneous connections
+- **Configurable**: Can be enabled/disabled via configuration
+
+### Using the Proxy
+
+#### Configure Client to Use Proxy
+
+**Windows (PowerShell/Internet Explorer):**
+```powershell
+# Set proxy for current session
+$env:HTTP_PROXY = "http://127.0.0.1:9701"
+$env:HTTPS_PROXY = "http://127.0.0.1:9701"
+
+# Or configure system-wide
+netsh winhttp set proxy proxy-server=127.0.0.1:9701
+```
+
+**macOS/Linux:**
+```bash
+# Set environment variables
+export HTTP_PROXY=http://127.0.0.1:9701
+export HTTPS_PROXY=http://127.0.0.1:9701
+
+# Or configure for specific applications
+curl --proxy http://127.0.0.1:9701 https://example.com
+```
+
+**Browser Configuration:**
+- **Chrome**: `--proxy-server=http://127.0.0.1:9701`
+- **Firefox**: Manual proxy configuration in Network Settings
+- **Edge**: Proxy settings in System Settings
+
+#### Test Proxy Functionality
+
+```bash
+# Test HTTP request through proxy
+curl --proxy http://127.0.0.1:9701 http://httpbin.org/ip
+
+# Test HTTPS request through proxy
+curl --proxy http://127.0.0.1:9701 https://httpbin.org/ip
+
+# Test with environment variables
+HTTP_PROXY=http://127.0.0.1:9701 curl http://httpbin.org/ip
+```
+
+### Proxy Configuration
+
+The proxy server can be configured in `config.json`:
+
+```json
+{
+  "proxy_enabled": true,
+  "proxy_bind_address": "0.0.0.0:9701"
+}
+```
+
+To disable the proxy server:
+```json
+{
+  "proxy_enabled": false,
+  "proxy_bind_address": "0.0.0.0:9701"
+}
+```
 
 ## Testing the Service
 
@@ -194,6 +276,12 @@ curl -X POST http://127.0.0.1:9700/api/dns/resolve \
 curl -X POST http://192.168.0.115:9700/api/dns/resolve \
   -H "Content-Type: application/json" \
   -d '{"hosts": ["google.com", "github.com"]}'
+
+# Test proxy server (from local machine)
+curl --proxy http://127.0.0.1:9701 http://httpbin.org/ip
+
+# Test proxy server (from remote machine)
+curl --proxy http://192.168.0.115:9701 http://httpbin.org/ip
 ```
 
 ## Network Access
@@ -205,11 +293,15 @@ The service is configured to listen on all interfaces (`0.0.0.0:9700`) by defaul
 #### Windows Firewall Configuration
 
 ```powershell
-# Allow inbound connections on port 9700
-New-NetFirewallRule -DisplayName "WDNS Service" -Direction Inbound -Protocol TCP -LocalPort 9700 -Action Allow
+# Allow inbound connections on DNS service port 9700
+New-NetFirewallRule -DisplayName "WDNS DNS Service" -Direction Inbound -Protocol TCP -LocalPort 9700 -Action Allow
+
+# Allow inbound connections on proxy port 9701
+New-NetFirewallRule -DisplayName "WDNS Proxy Service" -Direction Inbound -Protocol TCP -LocalPort 9701 -Action Allow
 
 # Or using netsh (run as Administrator)
-netsh advfirewall firewall add rule name="WDNS Service" dir=in action=allow protocol=TCP localport=9700
+netsh advfirewall firewall add rule name="WDNS DNS Service" dir=in action=allow protocol=TCP localport=9700
+netsh advfirewall firewall add rule name="WDNS Proxy Service" dir=in action=allow protocol=TCP localport=9701
 ```
 
 #### Testing Remote Access
@@ -231,10 +323,12 @@ curl -X POST http://192.168.0.115:9700/api/dns/resolve \
 
 #### Security Considerations
 
-- **Firewall**: Only open port 9700 if you need remote access
+- **Firewall**: Only open ports 9700 and 9701 if you need remote access
 - **Network Security**: Consider using VPN or private networks
 - **Authentication**: The current implementation has no authentication
 - **HTTPS**: Consider adding TLS encryption for production use
+- **Proxy Security**: The proxy server forwards all traffic without filtering
+- **Access Control**: Consider implementing IP whitelisting for production use
 
 ## Logging
 

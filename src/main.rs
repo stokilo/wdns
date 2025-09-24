@@ -7,6 +7,7 @@ mod dns;
 mod service;
 mod config;
 mod api;
+mod proxy;
 
 use config::Config;
 
@@ -37,7 +38,7 @@ async fn main() -> Result<()> {
 async fn run_standalone(config: Config) -> Result<()> {
     let dns_resolver = Arc::new(dns::DnsResolver::new()?);
     
-    info!("Server listening on {}", config.bind_address);
+    info!("DNS service listening on {}", config.bind_address);
 
     // Health check endpoint
     let health = warp::path("health")
@@ -48,12 +49,15 @@ async fn run_standalone(config: Config) -> Result<()> {
         })));
 
     // Root endpoint
+    let proxy_enabled = config.proxy_enabled;
     let root = warp::path::end()
         .and(warp::get())
-        .map(|| warp::reply::json(&serde_json::json!({
+        .map(move || warp::reply::json(&serde_json::json!({
             "service": "WDNS",
             "version": "0.1.0",
-            "endpoints": ["/health", "/api/dns/resolve"]
+            "endpoints": ["/health", "/api/dns/resolve"],
+            "proxy_enabled": proxy_enabled,
+            "proxy_port": if proxy_enabled { Some(9701) } else { None }
         })));
 
     // DNS resolution endpoint
@@ -69,9 +73,27 @@ async fn run_standalone(config: Config) -> Result<()> {
 
     let routes = health.or(root).or(dns_resolve);
 
-    warp::serve(routes)
-        .run(config.bind_addr()?)
-        .await;
+    // Start DNS service
+    let dns_server = warp::serve(routes).run(config.bind_addr()?);
+
+    // Start proxy server if enabled
+    if config.proxy_enabled {
+        info!("Proxy server listening on {}", config.proxy_bind_address);
+        let proxy_server = proxy::ProxyServer::new(config.proxy_bind_addr()?);
+        
+        // Run both servers concurrently
+        tokio::select! {
+            _ = dns_server => {
+                info!("DNS server stopped");
+            }
+            _ = proxy_server.run() => {
+                info!("Proxy server stopped");
+            }
+        }
+    } else {
+        info!("Proxy server disabled");
+        dns_server.await;
+    }
 
     Ok(())
 }

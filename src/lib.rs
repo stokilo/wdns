@@ -4,8 +4,10 @@
 pub mod dns;
 pub mod config;
 pub mod service;
+pub mod proxy;
 
 // Re-export main types for external use
 pub use dns::{DnsResolver, DnsRequest, DnsResponse, DnsResult};
 pub use config::Config;
 pub use service::{is_service_mode, run_as_service};
+pub use proxy::ProxyServer;

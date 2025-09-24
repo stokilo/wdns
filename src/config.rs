@@ -6,6 +6,8 @@ pub struct Config {
     pub bind_address: String,
     pub dns_timeout_seconds: u64,
     pub max_concurrent_resolutions: usize,
+    pub proxy_enabled: bool,
+    pub proxy_bind_address: String,
 }
 
 impl Default for Config {
@@ -14,6 +16,8 @@ impl Default for Config {
             bind_address: "0.0.0.0:9700".to_string(),
             dns_timeout_seconds: 10,
             max_concurrent_resolutions: 100,
+            proxy_enabled: true,
+            proxy_bind_address: "0.0.0.0:9701".to_string(),
         }
     }
 }
@@ -37,6 +41,11 @@ impl Config {
         self.bind_address.parse()
             .map_err(|e| anyhow::anyhow!("Invalid bind address '{}': {}", self.bind_address, e))
     }
+
+    pub fn proxy_bind_addr(&self) -> anyhow::Result<SocketAddr> {
+        self.proxy_bind_address.parse()
+            .map_err(|e| anyhow::anyhow!("Invalid proxy bind address '{}': {}", self.proxy_bind_address, e))
+    }
 }
 
 #[cfg(test)]
@@ -51,6 +60,8 @@ mod tests {
         assert_eq!(config.bind_address, "0.0.0.0:9700");
         assert_eq!(config.dns_timeout_seconds, 10);
         assert_eq!(config.max_concurrent_resolutions, 100);
+        assert_eq!(config.proxy_enabled, true);
+        assert_eq!(config.proxy_bind_address, "0.0.0.0:9701");
     }
 
     #[test]
@@ -91,6 +102,8 @@ mod tests {
             bind_address: "0.0.0.0:9090".to_string(),
             dns_timeout_seconds: 30,
             max_concurrent_resolutions: 200,
+            proxy_enabled: true,
+            proxy_bind_address: "0.0.0.0:9091".to_string(),
         };
         
         let config_json = serde_json::to_string_pretty(&test_config).expect("Failed to serialize");
@@ -136,13 +149,20 @@ mod tests {
             bind_address: "192.168.1.100:3000".to_string(),
             dns_timeout_seconds: 5,
             max_concurrent_resolutions: 50,
+            proxy_enabled: false,
+            proxy_bind_address: "192.168.1.100:3001".to_string(),
         };
         
         assert_eq!(config.bind_address, "192.168.1.100:3000");
         assert_eq!(config.dns_timeout_seconds, 5);
         assert_eq!(config.max_concurrent_resolutions, 50);
+        assert_eq!(config.proxy_enabled, false);
+        assert_eq!(config.proxy_bind_address, "192.168.1.100:3001");
         
         let addr = config.bind_addr().expect("Failed to parse bind address");
         assert_eq!(addr.to_string(), "192.168.1.100:3000");
+        
+        let proxy_addr = config.proxy_bind_addr().expect("Failed to parse proxy bind address");
+        assert_eq!(proxy_addr.to_string(), "192.168.1.100:3001");
     }
 }
