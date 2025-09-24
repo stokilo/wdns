@@ -1,0 +1,83 @@
+#!/bin/bash
+
+# WDNS Proxy Manager for macOS
+# Simple wrapper script for managing proxy configuration
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+QUICK_PROXY="$SCRIPT_DIR/macos-quick-proxy.sh"
+
+# Check if the quick proxy script exists
+if [[ ! -f "$QUICK_PROXY" ]]; then
+    echo "Error: macos-quick-proxy.sh not found in $SCRIPT_DIR"
+    exit 1
+fi
+
+# Function to show usage
+show_usage() {
+    echo "WDNS Proxy Manager"
+    echo "=================="
+    echo ""
+    echo "Usage: $0 [COMMAND]"
+    echo ""
+    echo "Commands:"
+    echo "  on, enable     Enable proxy configuration"
+    echo "  off, disable   Disable proxy configuration"
+    echo "  test           Test proxy configuration"
+    echo "  apps           Start applications with proxy"
+    echo "  status         Show current proxy status"
+    echo "  help           Show this help message"
+    echo ""
+    echo "Examples:"
+    echo "  $0 on          # Enable proxy"
+    echo "  $0 test         # Test proxy"
+    echo "  $0 apps         # Start applications"
+    echo "  $0 off          # Disable proxy"
+    echo ""
+    echo "Make sure the WDNS service is running:"
+    echo "  ./target/release/wdns-service"
+}
+
+# Main command handling
+case "${1:-}" in
+    on|enable)
+        echo "Enabling WDNS proxy configuration..."
+        "$QUICK_PROXY" -e
+        ;;
+    off|disable)
+        echo "Disabling WDNS proxy configuration..."
+        "$QUICK_PROXY" -d
+        ;;
+    test)
+        echo "Testing WDNS proxy configuration..."
+        "$QUICK_PROXY" -t
+        ;;
+    apps)
+        echo "Starting applications with proxy..."
+        "$QUICK_PROXY" -a
+        ;;
+    status)
+        echo "Checking WDNS proxy status..."
+        "$QUICK_PROXY" -u
+        ;;
+    help|--help|-h)
+        show_usage
+        ;;
+    "")
+        echo "WDNS Proxy Manager"
+        echo "=================="
+        echo ""
+        echo "Quick commands:"
+        echo "  $0 on     - Enable proxy"
+        echo "  $0 test   - Test proxy"
+        echo "  $0 apps   - Start applications"
+        echo "  $0 off    - Disable proxy"
+        echo ""
+        echo "For full help: $0 help"
+        ;;
+    *)
+        echo "Unknown command: $1"
+        echo ""
+        show_usage
+        exit 1
+        ;;
+esac

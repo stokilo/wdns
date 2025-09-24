@@ -373,6 +373,61 @@ $env:RUST_LOG="wdns=debug,hyper=info"
    sc.exe query "WDNSService"
    ```
 
+## macOS Proxy Setup
+
+The WDNS service includes comprehensive macOS proxy setup scripts that automatically configure your system to route all traffic through the proxy server.
+
+### Quick Setup
+
+```bash
+# 1. Start the WDNS service
+./target/release/wdns-service
+
+# 2. Enable proxy for all applications
+./scripts/proxy on
+
+# 3. Test the proxy configuration
+./scripts/proxy test
+
+# 4. Start applications with proxy
+./scripts/proxy apps
+```
+
+### Available Scripts
+
+- **`./scripts/proxy`** - Simple manager for common operations
+- **`./scripts/macos-quick-proxy.sh`** - Quick proxy setup
+- **`./scripts/macos-proxy-setup.sh`** - Full proxy management system
+- **`./scripts/README-macos-proxy.md`** - Detailed macOS proxy documentation
+
+### What It Does
+
+- **System Proxy**: Configures macOS system proxy settings
+- **Environment Variables**: Sets proxy environment variables for terminal applications
+- **Browser Configuration**: Creates browser profiles with proxy settings
+- **Automatic Management**: Monitors proxy server and reconfigures as needed
+
+### Usage Examples
+
+```bash
+# Enable proxy
+./scripts/proxy on
+
+# Test proxy
+./scripts/proxy test
+
+# Start applications
+./scripts/proxy apps
+
+# Check status
+./scripts/proxy status
+
+# Disable proxy
+./scripts/proxy off
+```
+
+For detailed information, see [macOS Proxy Setup Documentation](scripts/README-macos-proxy.md).
+
 ## Host Update Scripts
 
 ### Update /etc/hosts (Linux/macOS)
