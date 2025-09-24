@@ -1,5 +1,11 @@
 # WDNS Service
 
+# Update MacOS /etc/hosts
+
+```shell
+sudo sh scripts/update-hosts.sh
+```
+
 A high-performance Windows DNS resolution service built with Rust and Tokio. Provides HTTP API for concurrent DNS resolution with Windows service support.
 
 ## Features
@@ -218,8 +224,10 @@ curl http://192.168.0.115:9700/health
 # DNS resolution
 curl -X POST http://192.168.0.115:9700/api/dns/resolve \
   -H "Content-Type: application/json" \
-  -d '{"hosts": ["google.com", "github.com"]}'
+  -d '{"hosts": ["linde-uat.cprt.kion.cloud", "login-uat.kion.cloud", "networkpartner-kion-uat.cprt.kion.cloud", "networkpartner-kion-dev.cprt.kion.cloud", "kimdev.kiongroup.net", "linde-dev.cprt.kion.cloud"]}' | jq
 ```
+
+
 
 #### Security Considerations
 
@@ -270,6 +278,76 @@ $env:RUST_LOG="wdns=debug,hyper=info"
    ```powershell
    sc.exe query "WDNSService"
    ```
+
+## Host Update Scripts
+
+### Update /etc/hosts (Linux/macOS)
+
+The `update-hosts.sh` script calls the WDNS service and updates `/etc/hosts` with resolved IP addresses:
+
+```bash
+# Make executable
+chmod +x scripts/update-hosts.sh
+
+# Run as root (required to modify /etc/hosts)
+sudo ./scripts/update-hosts.sh
+
+# Use different WDNS server
+sudo ./scripts/update-hosts.sh 192.168.1.100:9700
+
+# Or set environment variable
+WDNS_SERVER="192.168.1.100:9700" sudo ./scripts/update-hosts.sh
+
+# Test the service first
+./scripts/test-wdns.sh
+
+# Diagnose connection issues
+./scripts/diagnose.sh
+
+# Diagnose specific server
+WDNS_SERVER="192.168.1.100:9700" ./scripts/diagnose.sh
+```
+
+**Features:**
+- Calls WDNS service to resolve hostnames
+- Creates backup of existing hosts file
+- Removes old entries for the same hosts
+- Adds new entries with resolved IP addresses
+- Colored output for better visibility
+
+### Update C:\Windows\System32\drivers\etc\hosts (Windows)
+
+The `update-hosts.ps1` script does the same for Windows:
+
+```powershell
+# Run as Administrator
+.\scripts\update-hosts.ps1
+
+# Test what would be changed (dry run)
+.\scripts\update-hosts.ps1 -WhatIf
+
+# Use different WDNS server
+.\scripts\update-hosts.ps1 -WdnsServer "192.168.1.100:9700"
+```
+
+**Features:**
+- PowerShell script for Windows
+- Administrator privileges required
+- Backup creation before changes
+- WhatIf mode for testing
+- Configurable WDNS server
+
+### Test Script
+
+Test the WDNS service with the configured hosts:
+
+```bash
+# Linux/macOS
+./scripts/test-wdns.sh
+
+# Windows PowerShell
+.\scripts\test-wdns.ps1
+```
 
 ## Development
 
