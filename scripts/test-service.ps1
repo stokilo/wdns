@@ -1,7 +1,7 @@
 # WDNS Service Test Script
 
 param(
-    [string]$ServiceUrl = "http://127.0.0.1:8080"
+    [string]$ServiceUrl = "http://127.0.0.1:9700"
 )
 
 Write-Host "Testing WDNS Service at $ServiceUrl" -ForegroundColor Green

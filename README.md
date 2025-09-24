@@ -57,34 +57,6 @@ Content-Type: application/json
 - **Windows 10/11** or **Windows Server 2016+** (for Windows service)
 - **Administrator privileges** (for service installation)
 - **Cross-platform**: Also works on macOS and Linux for development
-- **Windows Build Tools**: Microsoft Visual C++ Build Tools or Visual Studio (for Windows compilation)
-
-### Windows Requirements
-
-For Windows development, you need one of:
-- **Visual Studio 2017+** with C++ workload
-- **Build Tools for Visual Studio 2022** (recommended)
-- **Visual Studio Community** with C++ development tools
-
-Download from: https://visualstudio.microsoft.com/visual-cpp-build-tools/
-
-### Common Windows Issues
-
-#### Problem: `cargo` command not found
-```powershell
-# Add cargo to PATH
-$env:PATH += ";$env:USERPROFILE\.cargo\bin"
-
-# Or restart PowerShell after Rust installation
-```
-
-#### Problem: `link.exe` not found
-```powershell
-# Install Build Tools for Visual Studio 2022
-# Or use GNU toolchain:
-rustup target add x86_64-pc-windows-gnu
-rustup default stable-x86_64-pc-windows-gnu
-```
 
 ## Building
 
@@ -96,50 +68,19 @@ If you don't have Rust installed:
 # Install Rust via rustup
 Invoke-WebRequest -Uri "https://win.rustup.rs/x86_64" -OutFile "rustup-init.exe"
 .\rustup-init.exe -y
-
-# Add cargo to PATH (if needed)
-$env:PATH += ";$env:USERPROFILE\.cargo\bin"
-
-# Verify installation
-cargo --version
-rustc --version
-```
-
-### 1.1. Install Windows Build Tools (Required for Windows)
-
-```powershell
-# Option A: Install Build Tools for Visual Studio 2022 (Recommended)
-# Download from: https://visualstudio.microsoft.com/visual-cpp-build-tools/
-# Select "C++ build tools" during installation
-
-# Option B: Use GNU toolchain (Alternative)
-rustup target add x86_64-pc-windows-gnu
-rustup default stable-x86_64-pc-windows-gnu
-
-# Verify build tools
-where link.exe  # Should find link.exe
-where cl.exe    # Should find cl.exe
 ```
 
 ### 2. Build the Project
 
-```powershell
+```bash
 # Clone and build
 git clone <your-repo-url>
 cd wdns
-
-# Clean any previous builds
-cargo clean
-
-# Build the project
 cargo build --release
-
-# Run tests
-cargo test
 ```
 
 The executable will be created at:
-- **Windows**: `target\release\wdns-service.exe`
+- **Windows**: `target/release/wdns-service.exe`
 - **macOS/Linux**: `target/release/wdns-service`
 
 ## Running
@@ -148,7 +89,7 @@ The executable will be created at:
 
 Run the service directly for testing:
 
-```powershell
+```bash
 # Windows
 .\target\release\wdns-service.exe
 
@@ -156,10 +97,10 @@ Run the service directly for testing:
 ./target/release/wdns-service
 
 # Or with custom config (if implemented)
-.\target\release\wdns-service.exe --config custom-config.json
+./target/release/wdns-service --config custom-config.json
 ```
 
-The service will start on `http://127.0.0.1:8080` by default.
+The service will start on `http://127.0.0.1:9700` by default.
 
 ### Windows Service Mode
 
@@ -195,7 +136,7 @@ The service creates a `config.json` file on first run:
 
 ```json
 {
-  "bind_address": "127.0.0.1:8080",
+  "bind_address": "127.0.0.1:9700",
   "dns_timeout_seconds": 10,
   "max_concurrent_resolutions": 100
 }
@@ -213,24 +154,24 @@ The service creates a `config.json` file on first run:
 
 ```powershell
 # Health check
-Invoke-RestMethod -Uri "http://127.0.0.1:8080/health"
+Invoke-RestMethod -Uri "http://127.0.0.1:9700/health"
 
 # DNS resolution
 $body = @{
     hosts = @("google.com", "github.com", "stackoverflow.com")
 } | ConvertTo-Json
 
-Invoke-RestMethod -Uri "http://127.0.0.1:8080/api/dns/resolve" -Method POST -Body $body -ContentType "application/json"
+Invoke-RestMethod -Uri "http://127.0.0.1:9700/api/dns/resolve" -Method POST -Body $body -ContentType "application/json"
 ```
 
 ### Using curl
 
 ```bash
 # Health check
-curl http://127.0.0.1:8080/health
+curl http://127.0.0.1:9700/health
 
 # DNS resolution
-curl -X POST http://127.0.0.1:8080/api/dns/resolve \
+curl -X POST http://192.168.0.115:9700/api/dns/resolve \
   -H "Content-Type: application/json" \
   -d '{"hosts": ["google.com", "github.com"]}'
 ```
@@ -258,7 +199,7 @@ $env:RUST_LOG="wdns=debug,hyper=info"
 
 1. Check if the port is already in use:
    ```powershell
-   netstat -an | findstr :8080
+   netstat -an | findstr :9700
    ```
 
 2. Check Windows Event Log for service errors:

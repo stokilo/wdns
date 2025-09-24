@@ -11,7 +11,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            bind_address: "127.0.0.1:8080".to_string(),
+            bind_address: "127.0.0.1:9700".to_string(),
             dns_timeout_seconds: 10,
             max_concurrent_resolutions: 100,
         }
@@ -48,7 +48,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.bind_address, "127.0.0.1:8080");
+        assert_eq!(config.bind_address, "127.0.0.1:9700");
         assert_eq!(config.dns_timeout_seconds, 10);
         assert_eq!(config.max_concurrent_resolutions, 100);
     }
@@ -68,7 +68,7 @@ mod tests {
     fn test_config_bind_addr() {
         let config = Config::default();
         let addr = config.bind_addr().expect("Failed to parse bind address");
-        assert_eq!(addr.to_string(), "127.0.0.1:8080");
+        assert_eq!(addr.to_string(), "127.0.0.1:9700");
     }
 
     #[test]
@@ -122,7 +122,7 @@ mod tests {
         std::env::set_current_dir(&original_dir).expect("Failed to restore original dir");
         
         // Should create default config
-        assert_eq!(config.bind_address, "127.0.0.1:8080");
+        assert_eq!(config.bind_address, "127.0.0.1:9700");
         assert_eq!(config.dns_timeout_seconds, 10);
         assert_eq!(config.max_concurrent_resolutions, 100);
         
