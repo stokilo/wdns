@@ -6,7 +6,10 @@ use std::net::{IpAddr, SocketAddr};
 use std::collections::VecDeque;
 
 mod network_monitor;
+mod socks5_client;
+mod traffic_interceptor;
 use network_monitor::LowLevelNetworkMonitor;
+use traffic_interceptor::{TrafficInterceptor, SystemTrafficInterceptor};
 
 #[derive(Debug, Clone)]
 pub struct NetworkConnection {
@@ -38,6 +41,177 @@ pub enum ConnectionEvent {
     Established,
 }
 
+#[derive(Debug, Clone)]
+pub struct ProxyRule {
+    pub id: u32,
+    pub name: String,
+    pub pattern: String,  // e.g., "*.kion.cloud", "100.64.1.*", "*.kiongroup.net"
+    pub enabled: bool,
+    pub proxy_id: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxyConfig {
+    pub id: u32,
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub proxy_type: ProxyType,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProxyType {
+    Socks5,
+    Http,
+    Socks4,
+}
+
+impl Default for ProxyType {
+    fn default() -> Self {
+        ProxyType::Socks5
+    }
+}
+
+impl std::fmt::Display for ProxyType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProxyType::Socks5 => write!(f, "SOCKS5"),
+            ProxyType::Http => write!(f, "HTTP"),
+            ProxyType::Socks4 => write!(f, "SOCKS4"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxyManager {
+    pub proxies: Vec<ProxyConfig>,
+    pub rules: Vec<ProxyRule>,
+    pub next_proxy_id: u32,
+    pub next_rule_id: u32,
+    pub global_enabled: bool,
+}
+
+impl Default for ProxyManager {
+    fn default() -> Self {
+        Self {
+            proxies: Vec::new(),
+            rules: Vec::new(),
+            next_proxy_id: 1,
+            next_rule_id: 1,
+            global_enabled: false,
+        }
+    }
+}
+
+impl ProxyManager {
+    pub fn add_proxy(&mut self, name: String, host: String, port: u16, proxy_type: ProxyType) -> u32 {
+        let id = self.next_proxy_id;
+        self.next_proxy_id += 1;
+        
+        let proxy = ProxyConfig {
+            id,
+            name,
+            host,
+            port,
+            proxy_type,
+            username: None,
+            password: None,
+            enabled: true,
+        };
+        
+        self.proxies.push(proxy);
+        id
+    }
+    
+    pub fn add_rule(&mut self, name: String, pattern: String, proxy_id: u32) -> u32 {
+        let id = self.next_rule_id;
+        self.next_rule_id += 1;
+        
+        let rule = ProxyRule {
+            id,
+            name,
+            pattern,
+            enabled: true,
+            proxy_id,
+        };
+        
+        self.rules.push(rule);
+        id
+    }
+    
+    pub fn remove_proxy(&mut self, id: u32) -> bool {
+        if let Some(pos) = self.proxies.iter().position(|p| p.id == id) {
+            self.proxies.remove(pos);
+            // Remove rules that use this proxy
+            self.rules.retain(|r| r.proxy_id != id);
+            true
+        } else {
+            false
+        }
+    }
+    
+    pub fn remove_rule(&mut self, id: u32) -> bool {
+        if let Some(pos) = self.rules.iter().position(|r| r.id == id) {
+            self.rules.remove(pos);
+            true
+        } else {
+            false
+        }
+    }
+    
+    pub fn get_proxy_for_connection(&self, remote_addr: &SocketAddr) -> Option<&ProxyConfig> {
+        if !self.global_enabled {
+            return None;
+        }
+        
+        let hostname = match remote_addr.ip() {
+            IpAddr::V4(ip) => ip.to_string(),
+            IpAddr::V6(ip) => ip.to_string(),
+        };
+        
+        for rule in &self.rules {
+            if !rule.enabled {
+                continue;
+            }
+            
+            if self.matches_pattern(&rule.pattern, &hostname) {
+                return self.proxies.iter().find(|p| p.id == rule.proxy_id && p.enabled);
+            }
+        }
+        
+        None
+    }
+    
+    fn matches_pattern(&self, pattern: &str, hostname: &str) -> bool {
+        if pattern == hostname {
+            return true;
+        }
+        
+        if pattern.starts_with("*.") {
+            let suffix = &pattern[2..];
+            return hostname.ends_with(suffix);
+        }
+        
+        if pattern.ends_with(".*") {
+            let prefix = &pattern[..pattern.len() - 2];
+            return hostname.starts_with(prefix);
+        }
+        
+        // Simple wildcard matching
+        if pattern.contains("*") {
+            let parts: Vec<&str> = pattern.split('*').collect();
+            if parts.len() == 2 {
+                return hostname.starts_with(parts[0]) && hostname.ends_with(parts[1]);
+            }
+        }
+        
+        false
+    }
+}
+
 pub struct MacosListenerApp {
     connections: Arc<Mutex<Vec<NetworkConnection>>>,
     connection_log: Arc<Mutex<VecDeque<ConnectionLogEntry>>>,
@@ -57,6 +231,19 @@ pub struct MacosListenerApp {
     previous_connections: Vec<NetworkConnection>,
     network_monitor: LowLevelNetworkMonitor,
     use_low_level: bool,
+    proxy_manager: ProxyManager,
+    show_proxy_config: bool,
+    show_proxy_rules: bool,
+    new_proxy_name: String,
+    new_proxy_host: String,
+    new_proxy_port: String,
+    new_proxy_type: ProxyType,
+    new_rule_name: String,
+    new_rule_pattern: String,
+    selected_proxy_for_rule: Option<u32>,
+    traffic_interceptor: Option<TrafficInterceptor>,
+    system_interceptor: SystemTrafficInterceptor,
+    show_intercepted_traffic: bool,
 }
 
 impl Default for MacosListenerApp {
@@ -80,6 +267,19 @@ impl Default for MacosListenerApp {
             previous_connections: Vec::new(),
             network_monitor: LowLevelNetworkMonitor::new(),
             use_low_level: true,
+            proxy_manager: ProxyManager::default(),
+            show_proxy_config: false,
+            show_proxy_rules: false,
+            new_proxy_name: String::new(),
+            new_proxy_host: String::new(),
+            new_proxy_port: String::new(),
+            new_proxy_type: ProxyType::Socks5,
+            new_rule_name: String::new(),
+            new_rule_pattern: String::new(),
+            selected_proxy_for_rule: None,
+            traffic_interceptor: None,
+            system_interceptor: SystemTrafficInterceptor::new(),
+            show_intercepted_traffic: false,
         }
     }
 }
@@ -246,12 +446,12 @@ impl MacosListenerApp {
             connections.extend(sysctl_connections);
         } else {
             // Fallback to lsof/netstat if sysctl fails
-            if let Ok(tcp_connections) = self.get_tcp_connections() {
-                connections.extend(tcp_connections);
-            }
+        if let Ok(tcp_connections) = self.get_tcp_connections() {
+            connections.extend(tcp_connections);
+        }
 
-            if let Ok(udp_connections) = self.get_udp_connections() {
-                connections.extend(udp_connections);
+        if let Ok(udp_connections) = self.get_udp_connections() {
+            connections.extend(udp_connections);
             }
         }
 
@@ -515,6 +715,38 @@ impl MacosListenerApp {
                 
                 ui.separator();
                 
+                ui.label("Proxy:");
+                ui.checkbox(&mut self.proxy_manager.global_enabled, "Enable Proxy Routing");
+                if ui.button("Configure Proxies").clicked() {
+                    self.show_proxy_config = true;
+                }
+                if ui.button("Manage Rules").clicked() {
+                    self.show_proxy_rules = true;
+                }
+                
+                if ui.button("Start Traffic Interception").clicked() {
+                    if self.traffic_interceptor.is_none() {
+                        let proxy_manager = Arc::new(Mutex::new(self.proxy_manager.clone()));
+                        self.traffic_interceptor = Some(TrafficInterceptor::new(proxy_manager));
+                        if let Some(ref interceptor) = self.traffic_interceptor {
+                            let _ = interceptor.start();
+                        }
+                    }
+                }
+                
+                if ui.button("Stop Traffic Interception").clicked() {
+                    if let Some(ref interceptor) = self.traffic_interceptor {
+                        interceptor.stop();
+                    }
+                    self.traffic_interceptor = None;
+                }
+                
+                if ui.button("View Intercepted Traffic").clicked() {
+                    self.show_intercepted_traffic = true;
+                }
+                
+                ui.separator();
+                
                 ui.label("Sort by:");
                 egui::ComboBox::from_id_salt("sort_by")
                     .selected_text(format!("{:?}", self.sort_by))
@@ -585,6 +817,21 @@ impl MacosListenerApp {
         if self.show_log_dialog {
             self.render_connection_dialog(ctx);
         }
+        
+        // Proxy configuration dialog
+        if self.show_proxy_config {
+            self.render_proxy_config_dialog(ctx);
+        }
+        
+        // Proxy rules dialog
+        if self.show_proxy_rules {
+            self.render_proxy_rules_dialog(ctx);
+        }
+        
+        // Intercepted traffic dialog
+        if self.show_intercepted_traffic {
+            self.render_intercepted_traffic_dialog(ctx);
+        }
     }
 
     fn render_connections_table(&mut self, ui: &mut egui::Ui) {
@@ -647,7 +894,7 @@ impl MacosListenerApp {
 
         // Table header
         egui::Grid::new("connections_grid")
-            .num_columns(8)
+            .num_columns(9)
             .spacing([4.0, 2.0])
             .show(ui, |ui| {
                 ui.label("Local Address");
@@ -656,6 +903,7 @@ impl MacosListenerApp {
                 ui.label("State");
                 ui.label("Process");
                 ui.label("PID");
+                ui.label("Proxy");
                 ui.label("Bytes Sent");
                 ui.label("Bytes Received");
                 ui.end_row();
@@ -673,6 +921,19 @@ impl MacosListenerApp {
                     ui.label(&conn.state);
                     ui.label(&conn.process_name);
                     ui.label(conn.process_id.to_string());
+                    
+                    // Show proxy info
+                    let proxy_info = if let Some(remote_addr) = conn.remote_addr {
+                        if let Some(proxy) = self.proxy_manager.get_proxy_for_connection(&remote_addr) {
+                            format!("{}:{}", proxy.host, proxy.port)
+                        } else {
+                            "Direct".to_string()
+                        }
+                    } else {
+                        "N/A".to_string()
+                    };
+                    ui.label(proxy_info);
+                    
                     ui.label(format!("{}", conn.bytes_sent));
                     ui.label(format!("{}", conn.bytes_received));
                     ui.end_row();
@@ -887,6 +1148,281 @@ impl MacosListenerApp {
                     self.show_log_dialog = false;
                 }
             }
+        }
+    }
+    
+    fn render_proxy_config_dialog(&mut self, ctx: &egui::Context) {
+        let mut close_dialog = false;
+        
+        egui::Window::new("Proxy Configuration")
+            .open(&mut self.show_proxy_config)
+            .show(ctx, |ui| {
+                ui.heading("Proxy Servers");
+                ui.separator();
+                
+                // List existing proxies
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    let mut proxies_to_remove = Vec::new();
+                    let mut proxies_to_toggle = Vec::new();
+                    
+                    for proxy in &self.proxy_manager.proxies {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("{}: {}:{} ({})", 
+                                proxy.name, proxy.host, proxy.port, proxy.proxy_type));
+                            
+                            let mut enabled = proxy.enabled;
+                            ui.checkbox(&mut enabled, "Enabled");
+                            if enabled != proxy.enabled {
+                                proxies_to_toggle.push(proxy.id);
+                            }
+                            
+                            if ui.button("Remove").clicked() {
+                                proxies_to_remove.push(proxy.id);
+                            }
+                        });
+                    }
+                    
+                    // Apply changes after iteration
+                    for proxy_id in proxies_to_remove {
+                        self.proxy_manager.remove_proxy(proxy_id);
+                    }
+                    for proxy_id in proxies_to_toggle {
+                        if let Some(proxy) = self.proxy_manager.proxies.iter_mut().find(|p| p.id == proxy_id) {
+                            proxy.enabled = !proxy.enabled;
+                        }
+                    }
+                });
+                
+                ui.separator();
+                
+                // Add new proxy
+                ui.heading("Add New Proxy");
+                ui.horizontal(|ui| {
+                    ui.label("Name:");
+                    ui.text_edit_singleline(&mut self.new_proxy_name);
+                });
+                
+                ui.horizontal(|ui| {
+                    ui.label("Host:");
+                    ui.text_edit_singleline(&mut self.new_proxy_host);
+                });
+                
+                ui.horizontal(|ui| {
+                    ui.label("Port:");
+                    ui.text_edit_singleline(&mut self.new_proxy_port);
+                });
+                
+                ui.horizontal(|ui| {
+                    ui.label("Type:");
+                    egui::ComboBox::from_id_salt("proxy_type")
+                        .selected_text(format!("{}", self.new_proxy_type))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.new_proxy_type, ProxyType::Socks5, "SOCKS5");
+                            ui.selectable_value(&mut self.new_proxy_type, ProxyType::Http, "HTTP");
+                            ui.selectable_value(&mut self.new_proxy_type, ProxyType::Socks4, "SOCKS4");
+                        });
+                });
+                
+                if ui.button("Add Proxy").clicked() {
+                    if !self.new_proxy_name.is_empty() && !self.new_proxy_host.is_empty() {
+                        if let Ok(port) = self.new_proxy_port.parse::<u16>() {
+                            self.proxy_manager.add_proxy(
+                                self.new_proxy_name.clone(),
+                                self.new_proxy_host.clone(),
+                                port,
+                                self.new_proxy_type.clone()
+                            );
+                            
+                            // Clear form
+                            self.new_proxy_name.clear();
+                            self.new_proxy_host.clear();
+                            self.new_proxy_port.clear();
+                        }
+                    }
+                }
+                
+                ui.separator();
+                
+                ui.horizontal(|ui| {
+                    if ui.button("Close").clicked() {
+                        close_dialog = true;
+                    }
+                });
+            });
+        
+        if close_dialog {
+            self.show_proxy_config = false;
+        }
+    }
+    
+    fn render_proxy_rules_dialog(&mut self, ctx: &egui::Context) {
+        let mut close_dialog = false;
+        
+        egui::Window::new("Proxy Rules")
+            .open(&mut self.show_proxy_rules)
+            .show(ctx, |ui| {
+                ui.heading("Routing Rules");
+                ui.separator();
+                
+                // List existing rules
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    let mut rules_to_remove = Vec::new();
+                    let mut rules_to_toggle = Vec::new();
+                    
+                    for rule in &self.proxy_manager.rules {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("{}: {} -> Proxy {}", 
+                                rule.name, rule.pattern, rule.proxy_id));
+                            
+                            let mut enabled = rule.enabled;
+                            ui.checkbox(&mut enabled, "Enabled");
+                            if enabled != rule.enabled {
+                                rules_to_toggle.push(rule.id);
+                            }
+                            
+                            if ui.button("Remove").clicked() {
+                                rules_to_remove.push(rule.id);
+                            }
+                        });
+                    }
+                    
+                    // Apply changes after iteration
+                    for rule_id in rules_to_remove {
+                        self.proxy_manager.remove_rule(rule_id);
+                    }
+                    for rule_id in rules_to_toggle {
+                        if let Some(rule) = self.proxy_manager.rules.iter_mut().find(|r| r.id == rule_id) {
+                            rule.enabled = !rule.enabled;
+                        }
+                    }
+                });
+                
+                ui.separator();
+                
+                // Add new rule
+                ui.heading("Add New Rule");
+                ui.horizontal(|ui| {
+                    ui.label("Name:");
+                    ui.text_edit_singleline(&mut self.new_rule_name);
+                });
+                
+                ui.horizontal(|ui| {
+                    ui.label("Pattern:");
+                    ui.text_edit_singleline(&mut self.new_rule_pattern);
+                    ui.label("(e.g., *.kion.cloud, 100.64.1.*)");
+                });
+                
+                ui.horizontal(|ui| {
+                    ui.label("Proxy:");
+                    egui::ComboBox::from_id_salt("proxy_selection")
+                        .selected_text(if let Some(proxy_id) = self.selected_proxy_for_rule {
+                            self.proxy_manager.proxies.iter()
+                                .find(|p| p.id == proxy_id)
+                                .map(|p| p.name.clone())
+                                .unwrap_or_else(|| "Select proxy".to_string())
+                        } else {
+                            "Select proxy".to_string()
+                        })
+                        .show_ui(ui, |ui| {
+                            for proxy in &self.proxy_manager.proxies {
+                                ui.selectable_value(&mut self.selected_proxy_for_rule, Some(proxy.id), &proxy.name);
+                            }
+                        });
+                });
+                
+                if ui.button("Add Rule").clicked() {
+                    if !self.new_rule_name.is_empty() && !self.new_rule_pattern.is_empty() {
+                        if let Some(proxy_id) = self.selected_proxy_for_rule {
+                            self.proxy_manager.add_rule(
+                                self.new_rule_name.clone(),
+                                self.new_rule_pattern.clone(),
+                                proxy_id
+                            );
+                            
+                            // Clear form
+                            self.new_rule_name.clear();
+                            self.new_rule_pattern.clear();
+                            self.selected_proxy_for_rule = None;
+                        }
+                    }
+                }
+                
+                ui.separator();
+                
+                ui.horizontal(|ui| {
+                    if ui.button("Close").clicked() {
+                        close_dialog = true;
+                    }
+                });
+            });
+        
+        if close_dialog {
+            self.show_proxy_rules = false;
+        }
+    }
+    
+    fn render_intercepted_traffic_dialog(&mut self, ctx: &egui::Context) {
+        let mut close_dialog = false;
+        
+        egui::Window::new("Intercepted Traffic")
+            .open(&mut self.show_intercepted_traffic)
+            .show(ctx, |ui| {
+                ui.heading("Traffic Interception Results");
+                ui.separator();
+                
+                if let Some(ref interceptor) = self.traffic_interceptor {
+                    let intercepted_connections = interceptor.get_intercepted_connections();
+                    
+                    ui.label(format!("Total intercepted connections: {}", intercepted_connections.len()));
+                    ui.separator();
+                    
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for (idx, conn) in intercepted_connections.iter().enumerate() {
+                            ui.group(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("Connection {}: {} -> {:?}", 
+                                        idx + 1,
+                                        conn.original_connection.local_addr,
+                                        conn.original_connection.remote_addr
+                                    ));
+                                    
+                                    let status_color = match conn.status {
+                                        traffic_interceptor::InterceptionStatus::Proxied => egui::Color32::GREEN,
+                                        traffic_interceptor::InterceptionStatus::Direct => egui::Color32::BLUE,
+                                        traffic_interceptor::InterceptionStatus::Failed => egui::Color32::RED,
+                                        traffic_interceptor::InterceptionStatus::Pending => egui::Color32::YELLOW,
+                                    };
+                                    
+                                    ui.colored_label(status_color, format!("{:?}", conn.status));
+                                });
+                                
+                                if let Some(ref proxy) = conn.proxy_used {
+                                    ui.label(format!("Proxy: {}:{} ({})", 
+                                        proxy.host, proxy.port, proxy.proxy_type));
+                                } else {
+                                    ui.label("Direct connection");
+                                }
+                                
+                                ui.label(format!("Intercepted at: {:?}", conn.intercepted_at.elapsed()));
+                            });
+                        }
+                    });
+                } else {
+                    ui.label("Traffic interception is not active.");
+                    ui.label("Click 'Start Traffic Interception' to begin monitoring.");
+                }
+                
+                ui.separator();
+                
+                ui.horizontal(|ui| {
+                    if ui.button("Close").clicked() {
+                        close_dialog = true;
+                    }
+                });
+            });
+        
+        if close_dialog {
+            self.show_intercepted_traffic = false;
         }
     }
 }
