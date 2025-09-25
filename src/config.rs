@@ -8,6 +8,19 @@ pub struct Config {
     pub max_concurrent_resolutions: usize,
     pub proxy_enabled: bool,
     pub proxy_bind_address: String,
+    pub socks5_enabled: bool,
+    pub socks5_bind_address: String,
+    pub ssh_tunnel_config: Option<SshTunnelConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SshTunnelConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: Option<String>,
+    pub key_path: Option<String>,
+    pub local_port: u16,
 }
 
 impl Default for Config {
@@ -18,6 +31,9 @@ impl Default for Config {
             max_concurrent_resolutions: 100,
             proxy_enabled: true,
             proxy_bind_address: "0.0.0.0:9701".to_string(),
+            socks5_enabled: false,
+            socks5_bind_address: "0.0.0.0:9702".to_string(),
+            ssh_tunnel_config: None,
         }
     }
 }
@@ -45,6 +61,11 @@ impl Config {
     pub fn proxy_bind_addr(&self) -> anyhow::Result<SocketAddr> {
         self.proxy_bind_address.parse()
             .map_err(|e| anyhow::anyhow!("Invalid proxy bind address '{}': {}", self.proxy_bind_address, e))
+    }
+
+    pub fn socks5_bind_addr(&self) -> anyhow::Result<SocketAddr> {
+        self.socks5_bind_address.parse()
+            .map_err(|e| anyhow::anyhow!("Invalid SOCKS5 bind address '{}': {}", self.socks5_bind_address, e))
     }
 }
 

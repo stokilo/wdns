@@ -8,6 +8,8 @@ mod service;
 mod config;
 mod api;
 mod proxy;
+mod socks5;
+mod ssh_tunnel;
 
 use config::Config;
 
@@ -50,6 +52,7 @@ async fn run_standalone(config: Config) -> Result<()> {
 
     // Root endpoint
     let proxy_enabled = config.proxy_enabled;
+    let socks5_enabled = config.socks5_enabled;
     let root = warp::path::end()
         .and(warp::get())
         .map(move || warp::reply::json(&serde_json::json!({
@@ -57,7 +60,9 @@ async fn run_standalone(config: Config) -> Result<()> {
             "version": "0.1.0",
             "endpoints": ["/health", "/api/dns/resolve"],
             "proxy_enabled": proxy_enabled,
-            "proxy_port": if proxy_enabled { Some(9701) } else { None }
+            "proxy_port": if proxy_enabled { Some(9701) } else { None },
+            "socks5_enabled": socks5_enabled,
+            "socks5_port": if socks5_enabled { Some(9702) } else { None }
         })));
 
     // DNS resolution endpoint
@@ -76,23 +81,54 @@ async fn run_standalone(config: Config) -> Result<()> {
     // Start DNS service
     let dns_server = warp::serve(routes).run(config.bind_addr()?);
 
-    // Start proxy server if enabled
+    // Start proxy servers if enabled
+    let mut tasks = vec![];
+    
     if config.proxy_enabled {
-        info!("Proxy server listening on {}", config.proxy_bind_address);
+        info!("HTTP Proxy server listening on {}", config.proxy_bind_address);
         let proxy_server = proxy::ProxyServer::new(config.proxy_bind_addr()?);
-        
-        // Run both servers concurrently
-        tokio::select! {
-            _ = dns_server => {
-                info!("DNS server stopped");
+        tasks.push(tokio::spawn(async move {
+            if let Err(e) = proxy_server.run().await {
+                tracing::error!("HTTP Proxy server error: {}", e);
             }
-            _ = proxy_server.run() => {
-                info!("Proxy server stopped");
+        }));
+    }
+
+    if config.socks5_enabled {
+        info!("SOCKS5 server listening on {}", config.socks5_bind_address);
+        let socks5_server = socks5::Socks5Server::new(config.socks5_bind_addr()?);
+        tasks.push(tokio::spawn(async move {
+            if let Err(e) = socks5_server.run().await {
+                tracing::error!("SOCKS5 server error: {}", e);
+            }
+        }));
+    }
+
+    // Start SSH tunnel if configured
+    if let Some(ssh_config) = config.ssh_tunnel_config.clone() {
+        info!("Starting SSH tunnel to {}:{}", ssh_config.host, ssh_config.port);
+        let ssh_tunnel = ssh_tunnel::SshTunnelManager::new(ssh_config);
+        tasks.push(tokio::spawn(async move {
+            if let Err(e) = ssh_tunnel.start().await {
+                tracing::error!("SSH tunnel error: {}", e);
+            }
+        }));
+    }
+
+    // Run all servers concurrently
+    if tasks.is_empty() {
+        info!("No proxy servers enabled");
+        dns_server.await;
+    } else {
+        tasks.push(tokio::spawn(async move {
+            dns_server.await;
+        }));
+
+        tokio::select! {
+            _ = futures::future::join_all(tasks) => {
+                info!("All servers stopped");
             }
         }
-    } else {
-        info!("Proxy server disabled");
-        dns_server.await;
     }
 
     Ok(())

@@ -27,9 +27,15 @@ thiserror = "1.0"
 winapi = { version = "0.3", features = ["winuser", "processthreadsapi", "handleapi", "synchapi", "errhandlingapi"] }
 trust-dns-resolver = "0.23"
 futures-util = "0.3"
+futures = "0.3"
 hyper = { version = "0.14", features = ["full"] }
 bytes = "1.0"
 url = "2.0"
+# SSH and SOCKS5 dependencies
+russh = "0.44"
+russh-keys = "0.44"
+tokio-util = { version = "0.7", features = ["codec"] }
+async-trait = "0.1"
 
 [dev-dependencies]
 tempfile = "3.0"

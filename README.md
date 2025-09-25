@@ -15,6 +15,8 @@ A high-performance Windows DNS resolution service built with Rust and Tokio. Pro
 - 🪟 **Windows Service**: Runs as a native Windows service
 - 🌐 **HTTP API**: RESTful API for DNS resolution
 - 🔗 **HTTP Proxy**: Built-in HTTP proxy server for traffic tunneling
+- 🧦 **SOCKS5 Proxy**: Native SOCKS5 proxy server with SSH tunnel support
+- 🔐 **SSH Tunneling**: Secure SSH tunnel integration for encrypted proxy
 - ⚡ **Async**: Non-blocking I/O with Tokio
 - 📊 **Health Checks**: Built-in health monitoring endpoints
 
@@ -109,9 +111,10 @@ Run the service directly for testing:
 
 The service will start on:
 - **DNS Service**: `http://0.0.0.0:9700` (HTTP API)
-- **Proxy Server**: `http://0.0.0.0:9701` (HTTP Proxy)
+- **HTTP Proxy**: `http://0.0.0.0:9701` (HTTP Proxy)
+- **SOCKS5 Proxy**: `socks5://0.0.0.0:9702` (SOCKS5 Proxy)
 
-Both services listen on all interfaces by default.
+All services listen on all interfaces by default.
 
 ### Windows Service Mode
 
@@ -151,7 +154,10 @@ The service creates a `config.json` file on first run:
   "dns_timeout_seconds": 10,
   "max_concurrent_resolutions": 100,
   "proxy_enabled": true,
-  "proxy_bind_address": "0.0.0.0:9701"
+  "proxy_bind_address": "0.0.0.0:9701",
+  "socks5_enabled": false,
+  "socks5_bind_address": "0.0.0.0:9702",
+  "ssh_tunnel_config": null
 }
 ```
 
@@ -161,9 +167,16 @@ The service creates a `config.json` file on first run:
 - `dns_timeout_seconds`: Timeout for DNS resolution in seconds
 - `max_concurrent_resolutions`: Maximum number of concurrent DNS resolutions
 - `proxy_enabled`: Enable/disable the HTTP proxy server
-- `proxy_bind_address`: IP address and port to bind the proxy server
+- `proxy_bind_address`: IP address and port to bind the HTTP proxy server
+- `socks5_enabled`: Enable/disable the SOCKS5 proxy server
+- `socks5_bind_address`: IP address and port to bind the SOCKS5 proxy server
+- `ssh_tunnel_config`: SSH tunnel configuration for encrypted proxy (optional)
 
-## HTTP Proxy Server
+## Proxy Servers
+
+The service includes both HTTP and SOCKS5 proxy servers for different use cases.
+
+### HTTP Proxy Server
 
 The service includes a built-in HTTP proxy server that can tunnel traffic through port 9701.
 
@@ -217,22 +230,72 @@ curl --proxy http://127.0.0.1:9701 https://httpbin.org/ip
 HTTP_PROXY=http://127.0.0.1:9701 curl http://httpbin.org/ip
 ```
 
+### SOCKS5 Proxy Server
+
+The service includes a native SOCKS5 proxy server that can tunnel traffic through port 9702.
+
+#### SOCKS5 Features
+
+- **SOCKS5 Protocol**: Full SOCKS5 protocol support
+- **IPv4/IPv6 Support**: Handles both IPv4 and IPv6 connections
+- **Domain Name Resolution**: Supports domain name connections
+- **SSH Tunnel Integration**: Can route traffic through SSH tunnels
+- **Concurrent Connections**: Multiple simultaneous SOCKS5 connections
+
+#### Using SOCKS5 Proxy
+
+**Configure Client to Use SOCKS5:**
+
+```bash
+# Set SOCKS5 proxy environment variables
+export SOCKS5_PROXY=socks5://127.0.0.1:9702
+export ALL_PROXY=socks5://127.0.0.1:9702
+
+# Test SOCKS5 connection
+curl --socks5 127.0.0.1:9702 http://httpbin.org/ip
+```
+
+**Browser Configuration:**
+- **Chrome**: `--proxy-server=socks5://127.0.0.1:9702`
+- **Firefox**: Manual proxy configuration with SOCKS5
+- **Edge**: SOCKS5 proxy settings
+
+### SSH Tunnel Integration
+
+The SOCKS5 proxy can be configured to route traffic through SSH tunnels for enhanced security:
+
+```json
+{
+  "socks5_enabled": true,
+  "socks5_bind_address": "0.0.0.0:9702",
+  "ssh_tunnel_config": {
+    "host": "your-ssh-server.com",
+    "port": 22,
+    "username": "your-username",
+    "password": "your-password",
+    "local_port": 1080
+  }
+}
+```
+
 ### Proxy Configuration
 
-The proxy server can be configured in `config.json`:
+The proxy servers can be configured in `config.json`:
 
 ```json
 {
   "proxy_enabled": true,
-  "proxy_bind_address": "0.0.0.0:9701"
+  "proxy_bind_address": "0.0.0.0:9701",
+  "socks5_enabled": true,
+  "socks5_bind_address": "0.0.0.0:9702"
 }
 ```
 
-To disable the proxy server:
+To disable proxy servers:
 ```json
 {
   "proxy_enabled": false,
-  "proxy_bind_address": "0.0.0.0:9701"
+  "socks5_enabled": false
 }
 ```
 

@@ -1,0 +1,16 @@
+{
+  "bind_address": "0.0.0.0:9700",
+  "dns_timeout_seconds": 10,
+  "max_concurrent_resolutions": 100,
+  "proxy_enabled": true,
+  "proxy_bind_address": "0.0.0.0:9701",
+  "socks5_enabled": true,
+  "socks5_bind_address": "0.0.0.0:9702",
+  "ssh_tunnel_config": {
+    "host": "your-ssh-server.com",
+    "port": 22,
+    "username": "your-username",
+    "password": "your-password",
+    "local_port": 1080
+  }
+}

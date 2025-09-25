@@ -312,3 +312,4 @@ Wszystkie skrypty są gotowe do użycia. Zacznij od:
 ```
 
 I ciesz się pełną funkcjonalnością proxy WDNS na macOS!
+
