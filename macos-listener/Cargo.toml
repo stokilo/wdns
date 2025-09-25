@@ -17,9 +17,16 @@ pnet = "0.35"
 tokio = { version = "1.0", features = ["full"] }
 futures = "0.3"
 
+# Packet capture for traffic interception
+pcap = "1.0"
+
 # SOCKS5 proxy support
 socks5-client = "0.1"
 async-socks5 = "0.1"
+
+# DNS resolution and proxy
+trust-dns-resolver = "0.23"
+trust-dns-proto = "0.23"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

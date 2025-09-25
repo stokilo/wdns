@@ -8,8 +8,10 @@ use std::collections::VecDeque;
 mod network_monitor;
 mod socks5_client;
 mod traffic_interceptor;
+mod real_proxy;
 use network_monitor::LowLevelNetworkMonitor;
 use traffic_interceptor::{TrafficInterceptor, SystemTrafficInterceptor};
+use real_proxy::RealTrafficProxy;
 
 #[derive(Debug, Clone)]
 pub struct NetworkConnection {
@@ -192,14 +194,14 @@ impl ProxyManager {
             }
         };
         
-        println!("Checking proxy rules for hostname: {}", hostname);
+//         println!("Checking proxy rules for hostname: {}", hostname);
         
         for rule in &self.rules {
             if !rule.enabled {
                 continue;
             }
             
-            println!("Checking rule: {} (pattern: {})", rule.name, rule.pattern);
+//             println!("Checking rule: {} (pattern: {})", rule.name, rule.pattern);
             
             if self.matches_pattern(&rule.pattern, &hostname) {
                 println!("Rule '{}' matched for hostname '{}'", rule.name, hostname);
@@ -207,7 +209,7 @@ impl ProxyManager {
             }
         }
         
-        println!("No matching rule found for hostname: {}", hostname);
+//         println!("No matching rule found for hostname: {}", hostname);
         None
     }
     
@@ -312,6 +314,8 @@ pub struct MacosListenerApp {
     system_interceptor: SystemTrafficInterceptor,
     show_intercepted_traffic: bool,
     config_changed: bool,
+    real_proxy: Option<RealTrafficProxy>,
+    real_proxy_enabled: bool,
 }
 
 impl Default for MacosListenerApp {
@@ -368,6 +372,8 @@ impl Default for MacosListenerApp {
             system_interceptor: SystemTrafficInterceptor::new(),
             show_intercepted_traffic: false,
             config_changed: false,
+            real_proxy: None,
+            real_proxy_enabled: false,
         }
     }
 }
@@ -825,6 +831,25 @@ impl MacosListenerApp {
                 }
                 if ui.button("Manage Rules").clicked() {
                     self.show_proxy_rules = true;
+                }
+                
+                ui.separator();
+                ui.label("Real Proxy (Actual Traffic Routing):");
+                ui.checkbox(&mut self.real_proxy_enabled, "Enable Real Traffic Proxy");
+                
+                if self.real_proxy_enabled && self.real_proxy.is_none() {
+                    let proxy_manager = Arc::new(Mutex::new(self.proxy_manager.clone()));
+                    self.real_proxy = Some(RealTrafficProxy::new(proxy_manager));
+                    if let Err(e) = self.real_proxy.as_ref().unwrap().start() {
+                        eprintln!("Failed to start real proxy: {}", e);
+                        self.real_proxy = None;
+                    } else {
+                        println!("Real traffic proxy started - DNS and TCP traffic will be intercepted and routed through SOCKS5");
+                    }
+                } else if !self.real_proxy_enabled && self.real_proxy.is_some() {
+                    self.real_proxy.as_ref().unwrap().stop();
+                    self.real_proxy = None;
+                    println!("Real traffic proxy stopped");
                 }
                 
                 if ui.button("Start Traffic Interception").clicked() {
