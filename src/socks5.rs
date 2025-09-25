@@ -43,15 +43,29 @@ async fn handle_socks5_connection(mut stream: TcpStream) -> Result<()> {
     
     // Read SOCKS5 greeting
     let n = stream.read(&mut buffer).await?;
+    debug!("Received {} bytes from SOCKS5 client", n);
+    
     if n < 3 {
-        return Err(anyhow::anyhow!("Invalid SOCKS5 greeting"));
+        debug!("Invalid SOCKS5 greeting: too short ({} bytes)", n);
+        return Err(anyhow::anyhow!("Invalid SOCKS5 greeting: too short"));
     }
+    
+    // Log the first few bytes for debugging
+    debug!("SOCKS5 greeting bytes: {:?}", &buffer[0..std::cmp::min(n, 10)]);
 
     let version = buffer[0];
     let nmethods = buffer[1] as usize;
     
     if version != 5 {
-        return Err(anyhow::anyhow!("Unsupported SOCKS version: {}", version));
+        debug!("Invalid SOCKS version: {} (expected 5)", version);
+        
+        // Check if this might be an HTTP request
+        if buffer[0] == b'G' && buffer[1] == b'E' && buffer[2] == b'T' {
+            debug!("Client sent HTTP GET request instead of SOCKS5");
+            return Err(anyhow::anyhow!("Client sent HTTP request instead of SOCKS5"));
+        }
+        
+        return Err(anyhow::anyhow!("Unsupported SOCKS version: {} (expected 5)", version));
     }
 
     if n < 2 + nmethods {
@@ -143,8 +157,17 @@ async fn handle_socks5_connection(mut stream: TcpStream) -> Result<()> {
             debug!("Connected to destination: {}", dest_addr);
             
             // Send success response
-            let mut response = vec![5, 0, 0, 1];
-            response.extend_from_slice(&dest_addr.ip().to_string().as_bytes());
+            let mut response = vec![5, 0, 0];
+            match dest_addr.ip() {
+                IpAddr::V4(ip) => {
+                    response.push(1); // IPv4 address type
+                    response.extend_from_slice(&ip.octets());
+                }
+                IpAddr::V6(ip) => {
+                    response.push(4); // IPv6 address type
+                    response.extend_from_slice(&ip.octets());
+                }
+            }
             response.extend_from_slice(&dest_addr.port().to_be_bytes());
             stream.write_all(&response).await?;
 

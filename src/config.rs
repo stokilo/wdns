@@ -8,9 +8,19 @@ pub struct Config {
     pub max_concurrent_resolutions: usize,
     pub proxy_enabled: bool,
     pub proxy_bind_address: String,
+    #[serde(default = "default_socks5_enabled")]
     pub socks5_enabled: bool,
+    #[serde(default = "default_socks5_bind_address")]
     pub socks5_bind_address: String,
     pub ssh_tunnel_config: Option<SshTunnelConfig>,
+}
+
+fn default_socks5_enabled() -> bool {
+    false
+}
+
+fn default_socks5_bind_address() -> String {
+    "0.0.0.0:9702".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
