@@ -96,7 +96,7 @@ async fn run_standalone(config: Config) -> Result<()> {
 
     if config.socks5_enabled {
         info!("SOCKS5 server listening on {}", config.socks5_bind_address);
-        let socks5_server = socks5::Socks5Server::new(config.socks5_bind_addr()?);
+        let socks5_server = socks5::Socks5Server::new(config.socks5_bind_addr()?)?;
         tasks.push(tokio::spawn(async move {
             if let Err(e) = socks5_server.run().await {
                 tracing::error!("SOCKS5 server error: {}", e);

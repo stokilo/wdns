@@ -3,15 +3,18 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{debug, error, info};
+use trust_dns_resolver::TokioAsyncResolver;
 
 #[derive(Debug, Clone)]
 pub struct Socks5Server {
     pub bind_addr: SocketAddr,
+    resolver: TokioAsyncResolver,
 }
 
 impl Socks5Server {
-    pub fn new(bind_addr: SocketAddr) -> Self {
-        Self { bind_addr }
+    pub fn new(bind_addr: SocketAddr) -> Result<Self> {
+        let resolver = TokioAsyncResolver::tokio_from_system_conf()?;
+        Ok(Self { bind_addr, resolver })
     }
 
     pub async fn run(self) -> Result<()> {
@@ -24,8 +27,9 @@ impl Socks5Server {
             match listener.accept().await {
                 Ok((stream, addr)) => {
                     debug!("New SOCKS5 connection from {}", addr);
+                    let resolver = self.resolver.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_socks5_connection(stream).await {
+                        if let Err(e) = handle_socks5_connection(stream, resolver).await {
                             error!("SOCKS5 connection error: {}", e);
                         }
                     });
@@ -38,7 +42,7 @@ impl Socks5Server {
     }
 }
 
-async fn handle_socks5_connection(mut stream: TcpStream) -> Result<()> {
+async fn handle_socks5_connection(mut stream: TcpStream, resolver: TokioAsyncResolver) -> Result<()> {
     let mut buffer = [0u8; 1024];
     
     // Read SOCKS5 greeting
@@ -123,14 +127,31 @@ async fn handle_socks5_connection(mut stream: TcpStream) -> Result<()> {
             (SocketAddr::new(IpAddr::V4(ip), port), 6)
         }
         3 => {
-            // Domain name
+            // Domain name - resolve on server side
             let domain_len = buffer[4] as usize;
             if n < 5 + domain_len + 2 {
                 return Err(anyhow::anyhow!("Invalid domain name length"));
             }
-            let _domain = String::from_utf8_lossy(&buffer[5..5 + domain_len]);
+            let domain = String::from_utf8_lossy(&buffer[5..5 + domain_len]);
             let port = u16::from_be_bytes([buffer[5 + domain_len], buffer[5 + domain_len + 1]]);
-            (SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port), 5 + domain_len + 2)
+            
+            debug!("Resolving domain name: {}", domain);
+            
+            // Resolve domain name on server side
+            match resolver.lookup_ip(domain.as_ref()).await {
+                Ok(lookup) => {
+                    if let Some(ip) = lookup.iter().next() {
+                        debug!("Resolved {} to {}", domain, ip);
+                        (SocketAddr::new(ip, port), 5 + domain_len + 2)
+                    } else {
+                        return Err(anyhow::anyhow!("No IP addresses found for domain: {}", domain));
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to resolve domain {}: {}", domain, e);
+                    return Err(anyhow::anyhow!("DNS resolution failed for domain: {}", domain));
+                }
+            }
         }
         4 => {
             // IPv6
@@ -185,11 +206,11 @@ async fn handle_socks5_connection(mut stream: TcpStream) -> Result<()> {
 }
 
 async fn proxy_data(
-    mut client: TcpStream,
-    mut dest: TcpStream,
+    client: TcpStream,
+    dest: TcpStream,
 ) -> Result<()> {
-    let (mut client_read, mut client_write) = client.split();
-    let (mut dest_read, mut dest_write) = dest.split();
+    let (mut client_read, mut client_write) = client.into_split();
+    let (mut dest_read, mut dest_write) = dest.into_split();
 
     // Create bidirectional proxy
     let client_to_dest = tokio::io::copy(&mut client_read, &mut dest_write);
