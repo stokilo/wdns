@@ -1,8 +1,9 @@
 use eframe::egui;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::process::Command;
 use std::net::{IpAddr, SocketAddr};
+use std::collections::VecDeque;
 
 #[derive(Debug, Clone)]
 pub struct NetworkConnection {
@@ -18,8 +19,25 @@ pub struct NetworkConnection {
     pub interface: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct ConnectionLogEntry {
+    pub connection: NetworkConnection,
+    pub timestamp: SystemTime,
+    pub event_type: ConnectionEvent,
+    pub id: u64,
+}
+
+#[derive(Debug, Clone)]
+pub enum ConnectionEvent {
+    New,
+    Updated,
+    Closed,
+    Established,
+}
+
 pub struct MacosListenerApp {
     connections: Arc<Mutex<Vec<NetworkConnection>>>,
+    connection_log: Arc<Mutex<VecDeque<ConnectionLogEntry>>>,
     last_update: Instant,
     update_interval: Duration,
     selected_connection: Option<usize>,
@@ -29,12 +47,18 @@ pub struct MacosListenerApp {
     sort_by: SortBy,
     sort_ascending: bool,
     stats: NetworkStats,
+    log_filter_text: String,
+    show_log_dialog: bool,
+    selected_log_entry: Option<usize>,
+    log_entry_id_counter: u64,
+    previous_connections: Vec<NetworkConnection>,
 }
 
 impl Default for MacosListenerApp {
     fn default() -> Self {
         Self {
             connections: Arc::new(Mutex::new(Vec::new())),
+            connection_log: Arc::new(Mutex::new(VecDeque::new())),
             last_update: Instant::now(),
             update_interval: Duration::from_secs(2),
             selected_connection: None,
@@ -44,6 +68,11 @@ impl Default for MacosListenerApp {
             sort_by: SortBy::LocalAddr,
             sort_ascending: true,
             stats: NetworkStats::default(),
+            log_filter_text: String::new(),
+            show_log_dialog: false,
+            selected_log_entry: None,
+            log_entry_id_counter: 0,
+            previous_connections: Vec::new(),
         }
     }
 }
@@ -115,10 +144,75 @@ impl MacosListenerApp {
 
     fn update_connections(&mut self) {
         let connections = self.get_network_connections();
+        
+        // Log connection changes
+        self.log_connection_changes(&connections);
+        
         if let Ok(mut conns) = self.connections.lock() {
             *conns = connections;
         }
         self.update_stats();
+    }
+
+    fn log_connection_changes(&mut self, new_connections: &[NetworkConnection]) {
+        let mut log = if let Ok(log) = self.connection_log.lock() {
+            log.clone()
+        } else {
+            return;
+        };
+
+        // Find new connections
+        for new_conn in new_connections {
+            let is_new = !self.previous_connections.iter().any(|prev_conn| {
+                prev_conn.local_addr == new_conn.local_addr && 
+                prev_conn.remote_addr == new_conn.remote_addr &&
+                prev_conn.protocol == new_conn.protocol
+            });
+
+            if is_new {
+                self.log_entry_id_counter += 1;
+                let log_entry = ConnectionLogEntry {
+                    connection: new_conn.clone(),
+                    timestamp: SystemTime::now(),
+                    event_type: ConnectionEvent::New,
+                    id: self.log_entry_id_counter,
+                };
+                log.push_back(log_entry);
+            }
+        }
+
+        // Find closed connections
+        for prev_conn in &self.previous_connections {
+            let is_closed = !new_connections.iter().any(|new_conn| {
+                new_conn.local_addr == prev_conn.local_addr && 
+                new_conn.remote_addr == prev_conn.remote_addr &&
+                new_conn.protocol == prev_conn.protocol
+            });
+
+            if is_closed {
+                self.log_entry_id_counter += 1;
+                let log_entry = ConnectionLogEntry {
+                    connection: prev_conn.clone(),
+                    timestamp: SystemTime::now(),
+                    event_type: ConnectionEvent::Closed,
+                    id: self.log_entry_id_counter,
+                };
+                log.push_back(log_entry);
+            }
+        }
+
+        // Update previous connections
+        self.previous_connections = new_connections.to_vec();
+
+        // Keep only last 1000 entries
+        while log.len() > 1000 {
+            log.pop_front();
+        }
+
+        // Update the shared log
+        if let Ok(mut shared_log) = self.connection_log.lock() {
+            *shared_log = log;
+        }
     }
 
     fn get_network_connections(&self) -> Vec<NetworkConnection> {
@@ -283,7 +377,7 @@ impl MacosListenerApp {
     }
 
     fn render_ui(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::TopBottomPanel::top("header").show(ctx, |ui| {
             ui.heading("🔍 macOS Network Connection Monitor");
             
             // Stats panel
@@ -338,12 +432,50 @@ impl MacosListenerApp {
                     self.filter_text.clear();
                 }
             });
-            
-            ui.separator();
-            
-            // Connections table
-            self.render_connections_table(ui);
         });
+
+        // Split the main area into two panels
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                // Left panel - Current connections
+                ui.vertical(|ui| {
+                    ui.heading("📊 Current Connections");
+                    self.render_connections_table(ui);
+                });
+                
+                ui.separator();
+                
+                // Right panel - Connection log
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.heading("📝 Connection Log");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Clear Log").clicked() {
+                                if let Ok(mut log) = self.connection_log.lock() {
+                                    log.clear();
+                                }
+                            }
+                        });
+                    });
+                    
+                    // Log filter
+                    ui.horizontal(|ui| {
+                        ui.label("Log Filter:");
+                        ui.text_edit_singleline(&mut self.log_filter_text);
+                        if ui.button("Clear").clicked() {
+                            self.log_filter_text.clear();
+                        }
+                    });
+                    
+                    self.render_connection_log(ui);
+                });
+            });
+        });
+
+        // Connection details dialog
+        if self.show_log_dialog {
+            self.render_connection_dialog(ctx);
+        }
     }
 
     fn render_connections_table(&mut self, ui: &mut egui::Ui) {
@@ -455,6 +587,196 @@ impl MacosListenerApp {
                     ui.label(format!("Bytes Received: {}", conn.bytes_received));
                     ui.label(format!("Last Updated: {:?}", conn.last_updated.elapsed()));
                 });
+            }
+        }
+    }
+
+    fn render_connection_log(&mut self, ui: &mut egui::Ui) {
+        let log_entries = if let Ok(log) = self.connection_log.lock() {
+            log.clone()
+        } else {
+            return;
+        };
+
+        let filtered_entries: Vec<_> = log_entries
+            .iter()
+            .filter(|entry| {
+                if !self.log_filter_text.is_empty() {
+                    let filter_lower = self.log_filter_text.to_lowercase();
+                    entry.connection.local_addr.to_string().to_lowercase().contains(&filter_lower)
+                        || entry.connection.remote_addr.map(|addr| addr.to_string().to_lowercase().contains(&filter_lower)).unwrap_or(false)
+                        || entry.connection.process_name.to_lowercase().contains(&filter_lower)
+                        || entry.connection.protocol.to_lowercase().contains(&filter_lower)
+                        || entry.connection.state.to_lowercase().contains(&filter_lower)
+                        || format!("{:?}", entry.event_type).to_lowercase().contains(&filter_lower)
+                } else {
+                    true
+                }
+            })
+            .cloned()
+            .collect();
+
+        // Log entries table
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            egui::Grid::new("log_grid")
+                .num_columns(6)
+                .spacing([4.0, 2.0])
+                .show(ui, |ui| {
+                    ui.label("Time");
+                    ui.label("Event");
+                    ui.label("Local Address");
+                    ui.label("Remote Address");
+                    ui.label("Process");
+                    ui.label("Protocol");
+                    ui.end_row();
+
+                    for (idx, entry) in filtered_entries.iter().enumerate() {
+                        let is_selected = self.selected_log_entry == Some(idx);
+                        
+                        // Format timestamp
+                        let timestamp = entry.timestamp.duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        let time_str = format!("{}", timestamp % 86400); // Show seconds since midnight
+                        
+                        // Event type with color
+                        let event_color = match entry.event_type {
+                            ConnectionEvent::New => egui::Color32::GREEN,
+                            ConnectionEvent::Closed => egui::Color32::RED,
+                            ConnectionEvent::Updated => egui::Color32::YELLOW,
+                            ConnectionEvent::Established => egui::Color32::BLUE,
+                        };
+                        
+                        if ui.selectable_label(is_selected, &time_str).clicked() {
+                            self.selected_log_entry = Some(idx);
+                            self.show_log_dialog = true;
+                        }
+                        
+                        ui.colored_label(event_color, format!("{:?}", entry.event_type));
+                        ui.label(&entry.connection.local_addr.to_string());
+                        ui.label(entry.connection.remote_addr.map(|addr| addr.to_string()).unwrap_or_else(|| "N/A".to_string()));
+                        ui.label(&entry.connection.process_name);
+                        ui.label(&entry.connection.protocol);
+                        ui.end_row();
+                    }
+                });
+        });
+    }
+
+    fn render_connection_dialog(&mut self, ctx: &egui::Context) {
+        let log_entries = if let Ok(log) = self.connection_log.lock() {
+            log.clone()
+        } else {
+            return;
+        };
+
+        let filtered_entries: Vec<_> = log_entries
+            .iter()
+            .filter(|entry| {
+                if !self.log_filter_text.is_empty() {
+                    let filter_lower = self.log_filter_text.to_lowercase();
+                    entry.connection.local_addr.to_string().to_lowercase().contains(&filter_lower)
+                        || entry.connection.remote_addr.map(|addr| addr.to_string().to_lowercase().contains(&filter_lower)).unwrap_or(false)
+                        || entry.connection.process_name.to_lowercase().contains(&filter_lower)
+                        || entry.connection.protocol.to_lowercase().contains(&filter_lower)
+                        || entry.connection.state.to_lowercase().contains(&filter_lower)
+                        || format!("{:?}", entry.event_type).to_lowercase().contains(&filter_lower)
+                } else {
+                    true
+                }
+            })
+            .cloned()
+            .collect();
+
+        if let Some(selected_idx) = self.selected_log_entry {
+            if let Some(entry) = filtered_entries.get(selected_idx) {
+                let mut close_dialog = false;
+                egui::Window::new("Connection Details")
+                    .open(&mut self.show_log_dialog)
+                    .show(ctx, |ui| {
+                        ui.heading("Connection Details");
+                        ui.separator();
+                        
+                        ui.horizontal(|ui| {
+                            ui.label("Event Type:");
+                            let event_color = match entry.event_type {
+                                ConnectionEvent::New => egui::Color32::GREEN,
+                                ConnectionEvent::Closed => egui::Color32::RED,
+                                ConnectionEvent::Updated => egui::Color32::YELLOW,
+                                ConnectionEvent::Established => egui::Color32::BLUE,
+                            };
+                            ui.colored_label(event_color, format!("{:?}", entry.event_type));
+                        });
+                        
+                        ui.horizontal(|ui| {
+                            ui.label("Timestamp:");
+                            ui.label(format!("{:?}", entry.timestamp));
+                        });
+                        
+                        ui.horizontal(|ui| {
+                            ui.label("Local Address:");
+                            ui.label(&entry.connection.local_addr.to_string());
+                        });
+                        
+                        if let Some(remote) = entry.connection.remote_addr {
+                            ui.horizontal(|ui| {
+                                ui.label("Remote Address:");
+                                ui.label(&remote.to_string());
+                            });
+                        }
+                        
+                        ui.horizontal(|ui| {
+                            ui.label("Protocol:");
+                            ui.label(&entry.connection.protocol);
+                        });
+                        
+                        ui.horizontal(|ui| {
+                            ui.label("State:");
+                            ui.label(&entry.connection.state);
+                        });
+                        
+                        ui.horizontal(|ui| {
+                            ui.label("Process:");
+                            ui.label(&entry.connection.process_name);
+                        });
+                        
+                        ui.horizontal(|ui| {
+                            ui.label("Process ID:");
+                            ui.label(entry.connection.process_id.to_string());
+                        });
+                        
+                        ui.horizontal(|ui| {
+                            ui.label("Bytes Sent:");
+                            ui.label(entry.connection.bytes_sent.to_string());
+                        });
+                        
+                        ui.horizontal(|ui| {
+                            ui.label("Bytes Received:");
+                            ui.label(entry.connection.bytes_received.to_string());
+                        });
+                        
+                        ui.horizontal(|ui| {
+                            ui.label("Interface:");
+                            ui.label(&entry.connection.interface);
+                        });
+                        
+                        ui.horizontal(|ui| {
+                            ui.label("Log Entry ID:");
+                            ui.label(entry.id.to_string());
+                        });
+                        
+                        ui.separator();
+                        
+                        ui.horizontal(|ui| {
+                            if ui.button("Close").clicked() {
+                                close_dialog = true;
+                            }
+                        });
+                    });
+                
+                if close_dialog {
+                    self.show_log_dialog = false;
+                }
             }
         }
     }

@@ -10,15 +10,22 @@ A real-time network connection monitoring application for macOS built with Rust 
 - **Filtering and sorting**: Filter by address, process, protocol, or state
 - **Statistics**: Live statistics about connection counts
 - **Modern UI**: Clean, responsive interface built with egui
+- **Connection Logging**: Tracks connection events (new, closed, updated)
+- **Split-screen Layout**: Current connections and connection log side-by-side
+- **Detailed Dialogs**: Click any log entry to see full connection details
+- **Event Filtering**: Filter the connection log by port, process, or event type
 
 ## Screenshots
 
 The application displays:
 - Connection statistics (total, TCP, UDP, listening ports, established connections)
+- Split-screen layout with current connections and connection log
 - Sortable table of all network connections
 - Filter options for local/remote connections
 - Real-time updates every 1-10 seconds (configurable)
-- Detailed connection information on selection
+- Connection event logging (new, closed, updated connections)
+- Detailed connection information dialogs
+- Event filtering and log management
 
 ## Installation
 
@@ -77,13 +84,19 @@ cargo run --release
 ### Features
 
 1. **Connection Monitoring**: Automatically scans and displays all network connections
-2. **Filtering**: 
-   - Filter by text (address, process name, protocol, state)
+2. **Connection Logging**: Tracks and logs all connection events (new, closed, updated)
+3. **Split-screen Interface**: 
+   - Left panel: Current active connections
+   - Right panel: Connection event log
+4. **Filtering**: 
+   - Filter current connections by text (address, process name, protocol, state)
+   - Filter connection log by event type, port, process, etc.
    - Show only local connections
    - Show only remote connections
-3. **Sorting**: Sort by any column (address, process, protocol, state, bytes)
-4. **Real-time Updates**: Configurable update interval (1-10 seconds)
-5. **Connection Details**: Click any connection to see detailed information
+5. **Sorting**: Sort by any column (address, process, protocol, state, bytes)
+6. **Real-time Updates**: Configurable update interval (1-10 seconds)
+7. **Detailed Dialogs**: Click any log entry to see comprehensive connection details
+8. **Log Management**: Clear log, filter events, view connection history
 
 ### Keyboard Shortcuts
 
