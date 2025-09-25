@@ -8,9 +8,10 @@ use std::collections::VecDeque;
 mod network_monitor;
 mod socks5_client;
 mod traffic_interceptor;
+mod traffic_interceptor_helpers;
 mod real_proxy;
 use network_monitor::LowLevelNetworkMonitor;
-use traffic_interceptor::{TrafficInterceptor, SystemTrafficInterceptor};
+use traffic_interceptor::TrafficInterceptor;
 use real_proxy::RealTrafficProxy;
 
 #[derive(Debug, Clone)]
@@ -311,11 +312,14 @@ pub struct MacosListenerApp {
     new_rule_pattern: String,
     selected_proxy_for_rule: Option<u32>,
     traffic_interceptor: Option<TrafficInterceptor>,
-    system_interceptor: SystemTrafficInterceptor,
+    system_interceptor: TrafficInterceptor,
     show_intercepted_traffic: bool,
     config_changed: bool,
     real_proxy: Option<RealTrafficProxy>,
     real_proxy_enabled: bool,
+    show_test_hostname: bool,
+    test_hostname: String,
+    test_result: Option<String>,
 }
 
 impl Default for MacosListenerApp {
@@ -369,11 +373,14 @@ impl Default for MacosListenerApp {
             new_rule_pattern: String::new(),
             selected_proxy_for_rule: None,
             traffic_interceptor: None,
-            system_interceptor: SystemTrafficInterceptor::new(),
+            system_interceptor: TrafficInterceptor::new(Arc::new(Mutex::new(ProxyManager::default()))),
             show_intercepted_traffic: false,
             config_changed: false,
             real_proxy: None,
             real_proxy_enabled: false,
+            show_test_hostname: false,
+            test_hostname: String::new(),
+            test_result: None,
         }
     }
 }
@@ -832,6 +839,9 @@ impl MacosListenerApp {
                 if ui.button("Manage Rules").clicked() {
                     self.show_proxy_rules = true;
                 }
+                if ui.button("🧪 Test Hostname").clicked() {
+                    self.show_test_hostname = true;
+                }
                 
                 ui.separator();
                 ui.label("Real Proxy (Actual Traffic Routing):");
@@ -871,6 +881,29 @@ impl MacosListenerApp {
                 
                 if ui.button("View Intercepted Traffic").clicked() {
                     self.show_intercepted_traffic = true;
+                }
+                
+                if ui.button("Start Traffic Interceptor").clicked() {
+                    if self.traffic_interceptor.is_none() {
+                        let proxy_manager = Arc::new(Mutex::new(self.proxy_manager.clone()));
+                        self.traffic_interceptor = Some(TrafficInterceptor::new(proxy_manager));
+                        if let Some(ref interceptor) = self.traffic_interceptor {
+                            if let Err(e) = interceptor.start() {
+                                eprintln!("Failed to start traffic interceptor: {}", e);
+                                self.traffic_interceptor = None;
+                            } else {
+                                println!("Traffic interceptor started - will route matching traffic through SOCKS5 proxy");
+                            }
+                        }
+                    }
+                }
+                
+                if ui.button("Stop Traffic Interceptor").clicked() {
+                    if let Some(ref interceptor) = self.traffic_interceptor {
+                        interceptor.stop();
+                    }
+                    self.traffic_interceptor = None;
+                    println!("Traffic interceptor stopped");
                 }
                 
                 ui.separator();
@@ -977,6 +1010,11 @@ impl MacosListenerApp {
         // Intercepted traffic dialog
         if self.show_intercepted_traffic {
             self.render_intercepted_traffic_dialog(ctx);
+        }
+        
+        // Test hostname dialog
+        if self.show_test_hostname {
+            self.render_test_hostname_dialog(ctx);
         }
     }
 
@@ -1557,6 +1595,7 @@ impl MacosListenerApp {
                                         traffic_interceptor::InterceptionStatus::Direct => egui::Color32::BLUE,
                                         traffic_interceptor::InterceptionStatus::Failed => egui::Color32::RED,
                                         traffic_interceptor::InterceptionStatus::Pending => egui::Color32::YELLOW,
+                                        traffic_interceptor::InterceptionStatus::Timeout => egui::Color32::LIGHT_RED,
                                     };
                                     
                                     ui.colored_label(status_color, format!("{:?}", conn.status));
@@ -1589,6 +1628,208 @@ impl MacosListenerApp {
         
         if close_dialog {
             self.show_intercepted_traffic = false;
+        }
+    }
+    
+    fn render_test_hostname_dialog(&mut self, ctx: &egui::Context) {
+        let mut close_dialog = false;
+        let mut clear_result = false;
+        let mut test_direct = false;
+        let mut test_socks5 = false;
+        let mut test_interceptor = false;
+        
+        egui::Window::new("Test Hostname Resolution")
+            .open(&mut self.show_test_hostname)
+            .show(ctx, |ui| {
+                ui.heading("Test Hostname Resolution");
+                ui.separator();
+                
+                ui.label("Enter hostname to test:");
+                ui.text_edit_singleline(&mut self.test_hostname);
+                
+                ui.separator();
+                
+                ui.horizontal(|ui| {
+                    if ui.button("Test Direct DNS").clicked() {
+                        test_direct = true;
+                    }
+                    
+                    if ui.button("Test via SOCKS5").clicked() {
+                        test_socks5 = true;
+                    }
+                    
+                    if ui.button("Test via Interceptor").clicked() {
+                        test_interceptor = true;
+                    }
+                });
+                
+                ui.separator();
+                
+                if let Some(ref result) = self.test_result {
+                    ui.label("Test Result:");
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .max_height(300.0)
+                        .show(ui, |ui| {
+                            ui.label(result);
+                        });
+                }
+                
+                ui.separator();
+                
+                ui.horizontal(|ui| {
+                    if ui.button("Close").clicked() {
+                        close_dialog = true;
+                    }
+                    
+                    if ui.button("Clear").clicked() {
+                        clear_result = true;
+                    }
+                });
+            });
+        
+        if close_dialog {
+            self.show_test_hostname = false;
+        }
+        
+        if clear_result {
+            self.test_result = None;
+        }
+        
+        if test_direct {
+            self.test_direct_dns();
+        }
+        
+        if test_socks5 {
+            self.test_via_socks5();
+        }
+        
+        if test_interceptor {
+            self.test_via_interceptor();
+        }
+    }
+    
+    fn test_direct_dns(&mut self) {
+        if self.test_hostname.is_empty() {
+            self.test_result = Some("Error: Please enter a hostname".to_string());
+            return;
+        }
+        
+        let hostname = self.test_hostname.clone();
+        let result = std::thread::spawn(move || {
+            use std::process::Command;
+            
+            let output = Command::new("nslookup")
+                .arg(&hostname)
+                .output();
+            
+            match output {
+                Ok(result) => {
+                    if result.status.success() {
+                        format!("✅ Direct DNS Resolution:\n{}", String::from_utf8_lossy(&result.stdout))
+                    } else {
+                        format!("❌ Direct DNS Failed:\n{}", String::from_utf8_lossy(&result.stderr))
+                    }
+                }
+                Err(e) => format!("❌ DNS Command Error: {}", e)
+            }
+        });
+        
+        match result.join() {
+            Ok(result) => self.test_result = Some(result),
+            Err(_) => self.test_result = Some("❌ Thread error".to_string()),
+        }
+    }
+    
+    fn test_via_socks5(&mut self) {
+        if self.test_hostname.is_empty() {
+            self.test_result = Some("Error: Please enter a hostname".to_string());
+            return;
+        }
+        
+        let hostname = self.test_hostname.clone();
+        let result = std::thread::spawn(move || {
+            use std::process::Command;
+            
+            let output = Command::new("curl")
+                .args(&["--socks5-hostname", "192.168.0.115:9702", "-v", "--connect-timeout", "10", "--max-time", "30"])
+                .arg(&format!("http://{}", hostname))
+                .output();
+            
+            match output {
+                Ok(result) => {
+                    let stdout = String::from_utf8_lossy(&result.stdout);
+                    let stderr = String::from_utf8_lossy(&result.stderr);
+                    
+                    if result.status.success() {
+                        format!("✅ SOCKS5 Proxy Test:\nSTDOUT:\n{}\nSTDERR:\n{}", stdout, stderr)
+                    } else {
+                        format!("❌ SOCKS5 Proxy Failed:\nSTDOUT:\n{}\nSTDERR:\n{}", stdout, stderr)
+                    }
+                }
+                Err(e) => format!("❌ SOCKS5 Command Error: {}", e)
+            }
+        });
+        
+        match result.join() {
+            Ok(result) => self.test_result = Some(result),
+            Err(_) => self.test_result = Some("❌ Thread error".to_string()),
+        }
+    }
+    
+    fn test_via_interceptor(&mut self) {
+        if self.test_hostname.is_empty() {
+            self.test_result = Some("Error: Please enter a hostname".to_string());
+            return;
+        }
+        
+        let hostname = self.test_hostname.clone();
+        let result = std::thread::spawn(move || {
+            use std::process::Command;
+            
+            // Test DNS via interceptor
+            let dns_output = Command::new("nslookup")
+                .arg(&hostname)
+                .arg("127.0.0.1")
+                .output();
+            
+            let dns_result = match dns_output {
+                Ok(result) => {
+                    if result.status.success() {
+                        format!("✅ DNS via Interceptor:\n{}", String::from_utf8_lossy(&result.stdout))
+                    } else {
+                        format!("❌ DNS via Interceptor Failed:\n{}", String::from_utf8_lossy(&result.stderr))
+                    }
+                }
+                Err(e) => format!("❌ DNS Command Error: {}", e)
+            };
+            
+            // Test HTTP via interceptor
+            let http_output = Command::new("curl")
+                .args(&["--dns-servers", "127.0.0.1:5353", "-v", "--connect-timeout", "10", "--max-time", "30"])
+                .arg(&format!("http://{}", hostname))
+                .output();
+            
+            let http_result = match http_output {
+                Ok(result) => {
+                    let stdout = String::from_utf8_lossy(&result.stdout);
+                    let stderr = String::from_utf8_lossy(&result.stderr);
+                    
+                    if result.status.success() {
+                        format!("✅ HTTP via Interceptor:\nSTDOUT:\n{}\nSTDERR:\n{}", stdout, stderr)
+                    } else {
+                        format!("❌ HTTP via Interceptor Failed:\nSTDOUT:\n{}\nSTDERR:\n{}", stdout, stderr)
+                    }
+                }
+                Err(e) => format!("❌ HTTP Command Error: {}", e)
+            };
+            
+            format!("{}\n\n{}", dns_result, http_result)
+        });
+        
+        match result.join() {
+            Ok(result) => self.test_result = Some(result),
+            Err(_) => self.test_result = Some("❌ Thread error".to_string()),
         }
     }
 }
