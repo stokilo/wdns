@@ -2,7 +2,7 @@ use eframe::egui;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::process::Command;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, SocketAddr, Ipv4Addr, Ipv6Addr};
 use std::collections::VecDeque;
 
 #[derive(Debug, Clone)]
@@ -218,62 +218,78 @@ impl MacosListenerApp {
     fn get_network_connections(&self) -> Vec<NetworkConnection> {
         let mut connections = Vec::new();
 
-        // Get TCP connections using netstat
+        // Get TCP connections using lsof
         if let Ok(tcp_connections) = self.get_tcp_connections() {
             connections.extend(tcp_connections);
         }
 
-        // Get UDP connections using netstat
+        // Get UDP connections using lsof
         if let Ok(udp_connections) = self.get_udp_connections() {
             connections.extend(udp_connections);
-        }
-
-        // Get process information for each connection
-        let process_map = self.get_process_map();
-        
-        for conn in &mut connections {
-            if let Some(process_info) = process_map.get(&conn.process_id) {
-                conn.process_name = process_info.name.clone();
-            }
         }
 
         connections
     }
 
     fn get_tcp_connections(&self) -> Result<Vec<NetworkConnection>, Box<dyn std::error::Error>> {
-        let output = Command::new("netstat")
-            .args(&["-an", "-p", "tcp"])
+        // Use lsof instead of netstat for better process information
+        let output = Command::new("lsof")
+            .args(&["-i", "tcp", "-P", "-n"])
             .output()?;
 
         let output_str = String::from_utf8_lossy(&output.stdout);
         let mut connections = Vec::new();
 
-        for line in output_str.lines() {
-            if line.contains("tcp") {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 4 {
-                    if let Ok(local_addr) = self.parse_socket_addr(parts[3]) {
-                        let state = if parts.len() > 4 { parts[4].to_string() } else { "UNKNOWN".to_string() };
-                        let remote_addr = if parts.len() > 5 { 
-                            self.parse_socket_addr(parts[5]).ok() 
-                        } else { 
-                            None 
-                        };
-
-                        let connection = NetworkConnection {
-                            local_addr,
-                            remote_addr,
-                            protocol: "TCP".to_string(),
-                            state,
-                            process_name: "Unknown".to_string(),
-                            process_id: 0,
-                            bytes_sent: 0,
-                            bytes_received: 0,
-                            last_updated: Instant::now(),
-                            interface: "Unknown".to_string(),
-                        };
-
-                        connections.push(connection);
+        for line in output_str.lines().skip(1) { // Skip header
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 9 {
+                let process_name = parts[0].to_string();
+                let pid = parts[1].parse::<u32>().unwrap_or(0);
+                let node = parts[4];
+                let name = parts[8];
+                
+                
+                if node == "IPv4" || node == "IPv6" {
+                    if name.contains("->") {
+                        // Established connection
+                        let addresses: Vec<&str> = name.split("->").collect();
+                        if addresses.len() == 2 {
+                            if let (Ok(local_addr), Ok(remote_addr)) = (
+                                self.parse_socket_addr(addresses[0].trim()),
+                                self.parse_socket_addr(addresses[1].trim())
+                            ) {
+                                let connection = NetworkConnection {
+                                    local_addr,
+                                    remote_addr: Some(remote_addr),
+                                    protocol: "TCP".to_string(),
+                                    state: "ESTABLISHED".to_string(),
+                                    process_name,
+                                    process_id: pid,
+                                    bytes_sent: 0,
+                                    bytes_received: 0,
+                                    last_updated: Instant::now(),
+                                    interface: "Unknown".to_string(),
+                                };
+                                connections.push(connection);
+                            }
+                        }
+                    } else {
+                        // Listening connection
+                        if let Ok(local_addr) = self.parse_socket_addr(name) {
+                            let connection = NetworkConnection {
+                                local_addr,
+                                remote_addr: None,
+                                protocol: "TCP".to_string(),
+                                state: "LISTEN".to_string(),
+                                process_name,
+                                process_id: pid,
+                                bytes_sent: 0,
+                                bytes_received: 0,
+                                last_updated: Instant::now(),
+                                interface: "Unknown".to_string(),
+                            };
+                            connections.push(connection);
+                        }
                     }
                 }
             }
@@ -283,37 +299,36 @@ impl MacosListenerApp {
     }
 
     fn get_udp_connections(&self) -> Result<Vec<NetworkConnection>, Box<dyn std::error::Error>> {
-        let output = Command::new("netstat")
-            .args(&["-an", "-p", "udp"])
+        // Use lsof for UDP connections too
+        let output = Command::new("lsof")
+            .args(&["-i", "udp", "-P", "-n"])
             .output()?;
 
         let output_str = String::from_utf8_lossy(&output.stdout);
         let mut connections = Vec::new();
 
-        for line in output_str.lines() {
-            if line.contains("udp") {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 4 {
-                    if let Ok(local_addr) = self.parse_socket_addr(parts[3]) {
-                        let remote_addr = if parts.len() > 4 { 
-                            self.parse_socket_addr(parts[4]).ok() 
-                        } else { 
-                            None 
-                        };
-
+        for line in output_str.lines().skip(1) { // Skip header
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 9 {
+                let process_name = parts[0].to_string();
+                let pid = parts[1].parse::<u32>().unwrap_or(0);
+                let node = parts[4];
+                let name = parts[8];
+                
+                if node == "UDP" {
+                    if let Ok(local_addr) = self.parse_socket_addr(name) {
                         let connection = NetworkConnection {
                             local_addr,
-                            remote_addr,
+                            remote_addr: None,
                             protocol: "UDP".to_string(),
                             state: "UDP".to_string(),
-                            process_name: "Unknown".to_string(),
-                            process_id: 0,
+                            process_name,
+                            process_id: pid,
                             bytes_sent: 0,
                             bytes_received: 0,
                             last_updated: Instant::now(),
                             interface: "Unknown".to_string(),
                         };
-
                         connections.push(connection);
                     }
                 }
@@ -323,46 +338,35 @@ impl MacosListenerApp {
         Ok(connections)
     }
 
-    fn get_process_map(&self) -> std::collections::HashMap<u32, ProcessInfo> {
-        let mut process_map = std::collections::HashMap::new();
-        
-        if let Ok(output) = Command::new("lsof").args(&["-i", "-P", "-n"]).output() {
-            let output_str = String::from_utf8_lossy(&output.stdout);
-            
-            for line in output_str.lines().skip(1) { // Skip header
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 2 {
-                    if let Ok(pid) = parts[1].parse::<u32>() {
-                        let name = parts[0].to_string();
-                        process_map.insert(pid, ProcessInfo { name });
-                    }
-                }
-            }
-        }
-        
-        process_map
-    }
 
     fn parse_socket_addr(&self, addr_str: &str) -> Result<SocketAddr, Box<dyn std::error::Error>> {
-        // Handle addresses like "127.0.0.1.8080" or "*.8080"
+        // Handle addresses like "127.0.0.1:8080" or "*:8080" or "[::1]:8080"
         if addr_str.starts_with('*') {
-            let port_str = &addr_str[2..];
+            let port_str = &addr_str[2..]; // Remove "*:"
             let port = port_str.parse::<u16>()?;
-            return Ok(SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), port));
-        }
-
-        if let Some(dot_pos) = addr_str.rfind('.') {
-            let ip_part = &addr_str[..dot_pos];
-            let port_part = &addr_str[dot_pos + 1..];
-            
-            if let Ok(port) = port_part.parse::<u16>() {
-                if let Ok(ip) = ip_part.parse::<IpAddr>() {
-                    return Ok(SocketAddr::new(ip, port));
-                }
+            Ok(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), port))
+        } else if addr_str.starts_with('[') && addr_str.contains("]:") {
+            // IPv6 address in brackets like [::1]:8080
+            let end_bracket = addr_str.find("]:").ok_or("Invalid IPv6 format")?;
+            let ip_str = &addr_str[1..end_bracket]; // Remove [ and ]
+            let port_str = &addr_str[end_bracket + 2..]; // Remove ]:
+            let ip = ip_str.parse::<Ipv6Addr>()?;
+            let port = port_str.parse::<u16>()?;
+            Ok(SocketAddr::new(IpAddr::V6(ip), port))
+        } else if addr_str.contains(':') && !addr_str.starts_with('[') {
+            // IPv4 address like 127.0.0.1:8080
+            let parts: Vec<&str> = addr_str.rsplitn(2, ':').collect();
+            if parts.len() == 2 {
+                let port = parts[0].parse::<u16>()?;
+                let ip_str = parts[1];
+                let ip = ip_str.parse::<Ipv4Addr>()?;
+                Ok(SocketAddr::new(IpAddr::V4(ip), port))
+            } else {
+                Err("Invalid IPv4 address format".into())
             }
+        } else {
+            Err("Invalid address format".into())
         }
-
-        Err("Invalid socket address".into())
     }
 
     fn update_stats(&mut self) {
@@ -782,10 +786,6 @@ impl MacosListenerApp {
     }
 }
 
-#[derive(Debug, Clone)]
-struct ProcessInfo {
-    name: String,
-}
 
 fn main() -> Result<(), eframe::Error> {
     // Initialize logging
