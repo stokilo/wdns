@@ -21,3 +21,4 @@ config.json
 # Windows
 *.exe
 *.pdb
+/macos-listener/target/

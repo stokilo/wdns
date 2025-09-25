@@ -1,12 +1,21 @@
 # WDNS Service
 
-# Update MacOS /etc/hosts
+A high-performance Windows DNS resolution service built with Rust and Tokio. Provides HTTP API for concurrent DNS resolution and HTTP proxy server with Windows service support.
+
+## Projects
+
+This repository contains multiple related projects:
+
+- **Main Service** (`/`): WDNS Service - DNS resolution and proxy server
+- **macOS Listener** (`/macos-listener`): Network connection monitoring application for macOS
+
+## Quick Start
+
+### Update MacOS /etc/hosts
 
 ```shell
 sudo sh scripts/update-hosts.sh
 ```
-
-A high-performance Windows DNS resolution service built with Rust and Tokio. Provides HTTP API for concurrent DNS resolution and HTTP proxy server with Windows service support.
 
 ## Features
 
@@ -580,6 +589,32 @@ cargo build --release
 # Strip debug symbols (optional)
 strip target/release/wdns-service.exe
 ```
+
+## macOS Listener
+
+The repository also includes a macOS Network Connection Monitor application:
+
+### Features
+- **Real-time monitoring**: Shows all active network connections
+- **Process information**: Displays which process owns each connection  
+- **Filtering and sorting**: Filter by address, process, protocol, or state
+- **Modern UI**: Clean interface built with egui
+- **Statistics**: Live connection counts and statistics
+
+### Quick Start
+
+```bash
+# Navigate to the macOS Listener
+cd macos-listener
+
+# Run the application
+cargo run
+
+# Or use the provided script
+./run.sh
+```
+
+For more details, see the [macOS Listener README](macos-listener/README.md).
 
 ## License
 

@@ -1,0 +1,39 @@
+[package]
+name = "macos-listener"
+version = "0.1.0"
+edition = "2021"
+authors = ["WDNS Team"]
+description = "macOS Network Connection Monitor - Shows all active network connections on the host"
+license = "MIT"
+
+[dependencies]
+# UI Framework
+eframe = "0.32.0"
+egui = "0.32.0"
+
+# Network monitoring
+sysinfo = "0.36"
+pnet = "0.35"
+tokio = { version = "1.0", features = ["full"] }
+futures = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Async runtime
+async-trait = "0.1"
+
+# System information
+whoami = "1.4"
