@@ -1,0 +1,50 @@
+{
+  "proxies": [
+    {
+      "id": 1,
+      "name": "Kion SOCKS5 Proxy",
+      "host": "127.0.0.1",
+      "port": 1080,
+      "proxy_type": "Socks5",
+      "username": null,
+      "password": null,
+      "enabled": true
+    },
+    {
+      "id": 2,
+      "name": "Corporate HTTP Proxy",
+      "host": "proxy.company.com",
+      "port": 8080,
+      "proxy_type": "Http",
+      "username": "user",
+      "password": "pass",
+      "enabled": true
+    }
+  ],
+  "rules": [
+    {
+      "id": 1,
+      "name": "Kion Cloud Services",
+      "pattern": "*.kion.cloud",
+      "enabled": true,
+      "proxy_id": 1
+    },
+    {
+      "id": 2,
+      "name": "Kion Group Networks",
+      "pattern": "*.kiongroup.net",
+      "enabled": true,
+      "proxy_id": 1
+    },
+    {
+      "id": 3,
+      "name": "Internal Networks",
+      "pattern": "100.64.1.*",
+      "enabled": true,
+      "proxy_id": 2
+    }
+  ],
+  "next_proxy_id": 3,
+  "next_rule_id": 4,
+  "global_enabled": true
+}

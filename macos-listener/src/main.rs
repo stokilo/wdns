@@ -41,7 +41,7 @@ pub enum ConnectionEvent {
     Established,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProxyRule {
     pub id: u32,
     pub name: String,
@@ -50,7 +50,7 @@ pub struct ProxyRule {
     pub proxy_id: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProxyConfig {
     pub id: u32,
     pub name: String,
@@ -62,7 +62,7 @@ pub struct ProxyConfig {
     pub enabled: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ProxyType {
     Socks5,
     Http,
@@ -85,7 +85,7 @@ impl std::fmt::Display for ProxyType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProxyManager {
     pub proxies: Vec<ProxyConfig>,
     pub rules: Vec<ProxyRule>,
@@ -138,13 +138,26 @@ impl ProxyManager {
             proxy_id,
         };
         
+        println!("Adding rule: {} -> {} (proxy_id: {})", rule.name, rule.pattern, rule.proxy_id);
         self.rules.push(rule);
+        println!("Total rules now: {}", self.rules.len());
         id
     }
     
     pub fn remove_proxy(&mut self, id: u32) -> bool {
         if let Some(pos) = self.proxies.iter().position(|p| p.id == id) {
+            let proxy_name = self.proxies[pos].name.clone();
             self.proxies.remove(pos);
+            
+            // Count rules that will be removed
+            let rules_to_remove: Vec<_> = self.rules.iter().filter(|r| r.proxy_id == id).collect();
+            if !rules_to_remove.is_empty() {
+                println!("Warning: Removing proxy '{}' will also remove {} rules:", proxy_name, rules_to_remove.len());
+                for rule in &rules_to_remove {
+                    println!("  - {}: {}", rule.name, rule.pattern);
+                }
+            }
+            
             // Remove rules that use this proxy
             self.rules.retain(|r| r.proxy_id != id);
             true
@@ -167,40 +180,72 @@ impl ProxyManager {
             return None;
         }
         
-        let hostname = match remote_addr.ip() {
-            IpAddr::V4(ip) => ip.to_string(),
-            IpAddr::V6(ip) => ip.to_string(),
+        // Try to get hostname via reverse DNS lookup
+        let hostname = match self.reverse_dns_lookup(remote_addr.ip()) {
+            Some(host) => host,
+            None => {
+                // Fallback to IP address if reverse lookup fails
+                match remote_addr.ip() {
+                    IpAddr::V4(ip) => ip.to_string(),
+                    IpAddr::V6(ip) => ip.to_string(),
+                }
+            }
         };
+        
+        println!("Checking proxy rules for hostname: {}", hostname);
         
         for rule in &self.rules {
             if !rule.enabled {
                 continue;
             }
             
+            println!("Checking rule: {} (pattern: {})", rule.name, rule.pattern);
+            
             if self.matches_pattern(&rule.pattern, &hostname) {
+                println!("Rule '{}' matched for hostname '{}'", rule.name, hostname);
                 return self.proxies.iter().find(|p| p.id == rule.proxy_id && p.enabled);
             }
         }
         
+        println!("No matching rule found for hostname: {}", hostname);
+        None
+    }
+    
+    fn reverse_dns_lookup(&self, _ip: IpAddr) -> Option<String> {
+        // For now, we'll implement a simple approach
+        // In a real implementation, you would use proper reverse DNS lookup
+        // This is a placeholder that returns None to use IP fallback
         None
     }
     
     fn matches_pattern(&self, pattern: &str, hostname: &str) -> bool {
+        // Exact match
         if pattern == hostname {
             return true;
         }
         
+        // Domain wildcard patterns (e.g., "*.kion.cloud")
         if pattern.starts_with("*.") {
             let suffix = &pattern[2..];
             return hostname.ends_with(suffix);
         }
         
+        // Prefix wildcard patterns (e.g., "kion.*")
         if pattern.ends_with(".*") {
             let prefix = &pattern[..pattern.len() - 2];
             return hostname.starts_with(prefix);
         }
         
-        // Simple wildcard matching
+        // IP address wildcard patterns (e.g., "192.168.1.*")
+        if pattern.contains(".*") && !pattern.starts_with("*") && !pattern.ends_with("*") {
+            let parts: Vec<&str> = pattern.split(".*").collect();
+            if parts.len() == 2 {
+                let prefix = parts[0];
+                return hostname.starts_with(prefix);
+            }
+        }
+        
+        // General wildcard matching
         if pattern.contains("*") {
             let parts: Vec<&str> = pattern.split('*').collect();
             if parts.len() == 2 {
@@ -209,6 +254,28 @@ impl ProxyManager {
         }
         
         false
+    }
+    
+    /// Save configuration to JSON file
+    pub fn save_to_file(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let json = serde_json::to_string_pretty(self)?;
+        println!("Saving configuration with {} proxies and {} rules", self.proxies.len(), self.rules.len());
+        std::fs::write(path, json)?;
+        Ok(())
+    }
+    
+    /// Load configuration from JSON file
+    pub fn load_from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let json = std::fs::read_to_string(path)?;
+        let manager: ProxyManager = serde_json::from_str(&json)?;
+        println!("Loaded configuration with {} proxies and {} rules", manager.proxies.len(), manager.rules.len());
+        Ok(manager)
+    }
+    
+    /// Get default config file path
+    pub fn get_config_path() -> String {
+        let home_dir = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        format!("{}/.macos-listener-proxy-config.json", home_dir)
     }
 }
 
@@ -244,10 +311,30 @@ pub struct MacosListenerApp {
     traffic_interceptor: Option<TrafficInterceptor>,
     system_interceptor: SystemTrafficInterceptor,
     show_intercepted_traffic: bool,
+    config_changed: bool,
 }
 
 impl Default for MacosListenerApp {
     fn default() -> Self {
+        // Try to load proxy configuration from file
+        let proxy_manager = match ProxyManager::load_from_file(&ProxyManager::get_config_path()) {
+            Ok(manager) => {
+                println!("Loaded proxy configuration from {}", ProxyManager::get_config_path());
+                println!("Loaded {} proxies and {} rules", manager.proxies.len(), manager.rules.len());
+                for (i, proxy) in manager.proxies.iter().enumerate() {
+                    println!("  Proxy {}: {} ({}:{})", i, proxy.name, proxy.host, proxy.port);
+                }
+                for (i, rule) in manager.rules.iter().enumerate() {
+                    println!("  Rule {}: {} -> {} (proxy_id: {})", i, rule.name, rule.pattern, rule.proxy_id);
+                }
+                manager
+            }
+            Err(e) => {
+                println!("No existing proxy configuration found, using defaults: {}", e);
+                ProxyManager::default()
+            }
+        };
+        
         Self {
             connections: Arc::new(Mutex::new(Vec::new())),
             connection_log: Arc::new(Mutex::new(VecDeque::new())),
@@ -267,7 +354,7 @@ impl Default for MacosListenerApp {
             previous_connections: Vec::new(),
             network_monitor: LowLevelNetworkMonitor::new(),
             use_low_level: true,
-            proxy_manager: ProxyManager::default(),
+            proxy_manager,
             show_proxy_config: false,
             show_proxy_rules: false,
             new_proxy_name: String::new(),
@@ -280,6 +367,7 @@ impl Default for MacosListenerApp {
             traffic_interceptor: None,
             system_interceptor: SystemTrafficInterceptor::new(),
             show_intercepted_traffic: false,
+            config_changed: false,
         }
     }
 }
@@ -347,6 +435,16 @@ impl MacosListenerApp {
         };
         app.update_connections();
         app
+    }
+    
+    /// Save proxy configuration to file
+    fn save_proxy_config(&mut self) {
+        println!("Attempting to save configuration with {} proxies and {} rules", 
+                 self.proxy_manager.proxies.len(), self.proxy_manager.rules.len());
+        match self.proxy_manager.save_to_file(&ProxyManager::get_config_path()) {
+            Ok(_) => println!("Proxy configuration saved to {}", ProxyManager::get_config_path()),
+            Err(e) => eprintln!("Failed to save proxy configuration: {}", e),
+        }
     }
 
     fn update_connections(&mut self) {
@@ -716,7 +814,12 @@ impl MacosListenerApp {
                 ui.separator();
                 
                 ui.label("Proxy:");
-                ui.checkbox(&mut self.proxy_manager.global_enabled, "Enable Proxy Routing");
+                let mut global_enabled = self.proxy_manager.global_enabled;
+                ui.checkbox(&mut global_enabled, "Enable Proxy Routing");
+                if global_enabled != self.proxy_manager.global_enabled {
+                    self.proxy_manager.global_enabled = global_enabled;
+                    self.save_proxy_config();
+                }
                 if ui.button("Configure Proxies").clicked() {
                     self.show_proxy_config = true;
                 }
@@ -743,6 +846,24 @@ impl MacosListenerApp {
                 
                 if ui.button("View Intercepted Traffic").clicked() {
                     self.show_intercepted_traffic = true;
+                }
+                
+                ui.separator();
+                
+                if ui.button("Save Configuration").clicked() {
+                    self.save_proxy_config();
+                }
+                
+                if ui.button("Load Configuration").clicked() {
+                    match ProxyManager::load_from_file(&ProxyManager::get_config_path()) {
+                        Ok(manager) => {
+                            self.proxy_manager = manager;
+                            println!("Configuration loaded from {}", ProxyManager::get_config_path());
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to load configuration: {}", e);
+                        }
+                    }
                 }
                 
                 ui.separator();
@@ -1183,13 +1304,21 @@ impl MacosListenerApp {
                     }
                     
                     // Apply changes after iteration
+                    let mut config_changed = false;
                     for proxy_id in proxies_to_remove {
                         self.proxy_manager.remove_proxy(proxy_id);
+                        config_changed = true;
                     }
                     for proxy_id in proxies_to_toggle {
                         if let Some(proxy) = self.proxy_manager.proxies.iter_mut().find(|p| p.id == proxy_id) {
                             proxy.enabled = !proxy.enabled;
+                            config_changed = true;
                         }
+                    }
+                    
+                    // Mark that configuration changed (will save after dialog closes)
+                    if config_changed {
+                        self.config_changed = true;
                     }
                 });
                 
@@ -1252,6 +1381,8 @@ impl MacosListenerApp {
         
         if close_dialog {
             self.show_proxy_config = false;
+            // Auto-save configuration when dialog closes
+            self.save_proxy_config();
         }
     }
     
@@ -1287,13 +1418,21 @@ impl MacosListenerApp {
                     }
                     
                     // Apply changes after iteration
+                    let mut config_changed = false;
                     for rule_id in rules_to_remove {
                         self.proxy_manager.remove_rule(rule_id);
+                        config_changed = true;
                     }
                     for rule_id in rules_to_toggle {
                         if let Some(rule) = self.proxy_manager.rules.iter_mut().find(|r| r.id == rule_id) {
                             rule.enabled = !rule.enabled;
+                            config_changed = true;
                         }
+                    }
+                    
+                    // Mark that configuration changed (will save after dialog closes)
+                    if config_changed {
+                        self.config_changed = true;
                     }
                 });
                 
@@ -1358,6 +1497,8 @@ impl MacosListenerApp {
         
         if close_dialog {
             self.show_proxy_rules = false;
+            // Auto-save configuration when dialog closes
+            self.save_proxy_config();
         }
     }
     
